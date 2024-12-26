@@ -1,6 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 
+import { appEnv } from '@/config/app';
 import { authEnv } from '@/config/auth';
 import NextAuthEdge from '@/libs/next-auth/edge';
 
@@ -55,11 +56,26 @@ const isProtectedRoute = createRouteMatcher([
 export default authEnv.NEXT_PUBLIC_ENABLE_CLERK_AUTH
   ? clerkMiddleware(
       (auth, req) => {
+        // 自有功能
+        const requestHeaders = new Headers(req.headers);
+        requestHeaders.set('x-forwarded-host', appEnv.APP_URL || 'https://chat.ksh7.com?1');
+
         if (isProtectedRoute(req)) auth().protect();
+
+        // 自有功能
+        return NextResponse.next({
+          request: {
+            headers: requestHeaders,
+          },
+        });
       },
       {
         // https://github.com/lobehub/lobe-chat/pull/3084
         clockSkewInMs: 60 * 60 * 1000,
+
+        // 自有功能
+        domain: appEnv.APP_URL || 'https://chat.ksh7.com?2',
+
         signInUrl: '/login',
         signUpUrl: '/signup',
       },
