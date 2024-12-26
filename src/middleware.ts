@@ -1,7 +1,6 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 
-import { appEnv } from '@/config/app';
 import { authEnv } from '@/config/auth';
 import NextAuthEdge from '@/libs/next-auth/edge';
 
@@ -53,33 +52,18 @@ const isProtectedRoute = createRouteMatcher([
   // ↓ cloud ↓
 ]);
 
-const beforeClerkMiddleware = clerkMiddleware(
-  (auth, req) => {
-    const requestHeaders = new Headers(req.headers);
-    requestHeaders.set('host', 'https://chat.ksh7.com');
-
-    if (isProtectedRoute(req)) auth().protect();
-
-    return NextResponse.next({
-      request: {
-        headers: requestHeaders,
-      },
-    });
-  },
-  {
-    afterSignInUrl: '/chat?signIn=true',
-    afterSignUpUrl: '/chat?signup=true',
-
-    // https://github.com/lobehub/lobe-chat/pull/3084
-    clockSkewInMs: 60 * 60 * 1000,
-    domain: appEnv.APP_URL || 'https://chat.ksh7.com',
-    signInUrl: '/login',
-    signUpUrl: '/signup',
-  },
-);
-
 export default authEnv.NEXT_PUBLIC_ENABLE_CLERK_AUTH
-  ? beforeClerkMiddleware
+  ? clerkMiddleware(
+      (auth, req) => {
+        if (isProtectedRoute(req)) auth().protect();
+      },
+      {
+        // https://github.com/lobehub/lobe-chat/pull/3084
+        clockSkewInMs: 60 * 60 * 1000,
+        signInUrl: '/login',
+        signUpUrl: '/signup',
+      },
+    )
   : authEnv.NEXT_PUBLIC_ENABLE_NEXT_AUTH
     ? nextAuthMiddleware
     : defaultMiddleware;
