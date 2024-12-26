@@ -1,6 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 
+import { appEnv } from '@/config/app';
 import { authEnv } from '@/config/auth';
 import NextAuthEdge from '@/libs/next-auth/edge';
 
@@ -60,6 +61,7 @@ export default authEnv.NEXT_PUBLIC_ENABLE_CLERK_AUTH
       {
         // https://github.com/lobehub/lobe-chat/pull/3084
         clockSkewInMs: 60 * 60 * 1000,
+        domain: appEnv.APP_URL || 'https://chat.ksh7.com',
         signInUrl: '/login',
         signUpUrl: '/signup',
       },
