@@ -63,8 +63,8 @@ const clerkNextMiddleware = clerkMiddleware(
     clockSkewInMs: 60 * 60 * 1000,
 
     // 自有功能
-    debug: true,
-    domain: appEnv.APP_URL || 'https://chat.ksh7.com?2',
+    // debug: true,
+    domain: appEnv.APP_URL,
 
     signInUrl: '/login',
     signUpUrl: '/signup',
@@ -75,7 +75,7 @@ const clerkNextMiddleware = clerkMiddleware(
 const beforeClerkAuthMiddleware = (request: NextRequest, ...args: any) => {
   // Clone the request headers and set a new header `x-hello-from-middleware1`
   // const requestHeaders = new Headers(request.headers)
-  request.headers.set('x-forwarded-host', appEnv.APP_URL || 'https://chat.ksh7.com?1');
+  request.headers.set('x-forwarded-host', process.env.HOST!);
 
   // @ts-ignore
   return clerkNextMiddleware(request, ...args);
