@@ -53,19 +53,33 @@ const isProtectedRoute = createRouteMatcher([
   // ↓ cloud ↓
 ]);
 
+const beforeClerkMiddleware = clerkMiddleware(
+  (auth, req) => {
+    const requestHeaders = new Headers(req.headers);
+    requestHeaders.set('host', 'https://chat.ksh7.com');
+
+    if (isProtectedRoute(req)) auth().protect();
+
+    return NextResponse.next({
+      request: {
+        headers: requestHeaders,
+      },
+    });
+  },
+  {
+    afterSignInUrl: '/chat?signIn=true',
+    afterSignUpUrl: '/chat?signup=true',
+
+    // https://github.com/lobehub/lobe-chat/pull/3084
+    clockSkewInMs: 60 * 60 * 1000,
+    domain: appEnv.APP_URL || 'https://chat.ksh7.com',
+    signInUrl: '/login',
+    signUpUrl: '/signup',
+  },
+);
+
 export default authEnv.NEXT_PUBLIC_ENABLE_CLERK_AUTH
-  ? clerkMiddleware(
-      (auth, req) => {
-        if (isProtectedRoute(req)) auth().protect();
-      },
-      {
-        // https://github.com/lobehub/lobe-chat/pull/3084
-        clockSkewInMs: 60 * 60 * 1000,
-        domain: appEnv.APP_URL || 'https://chat.ksh7.com',
-        signInUrl: '/login',
-        signUpUrl: '/signup',
-      },
-    )
+  ? beforeClerkMiddleware
   : authEnv.NEXT_PUBLIC_ENABLE_NEXT_AUTH
     ? nextAuthMiddleware
     : defaultMiddleware;
