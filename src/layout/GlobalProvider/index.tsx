@@ -27,7 +27,9 @@ import StyleRegistry from './StyleRegistry';
 
 const parserFallbackLang = async () => {
   // if the default language is not 'en-US', just return the default language as fallback lang
-  if (DEFAULT_LANG !== 'en-US') return DEFAULT_LANG;
+  // if (DEFAULT_LANG !== 'en-US') return DEFAULT_LANG;
+  // 自有
+  if (DEFAULT_LANG === 'en-US') return 'zh-CN';
 
   const header = await headers();
   /**
