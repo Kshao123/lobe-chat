@@ -44,6 +44,9 @@ const Clerk = memo(({ children }: PropsWithChildren) => {
   return (
     <ClerkProvider
       appearance={updatedAppearance}
+      // 自有 https://www.npmjs.com/package/@clerk/clerk-js?activeTab=readme
+      clerkJSUrl="https://npm.webcache.cn/@clerk/clerk-js@5/dist/clerk.browser.js"
+      dynamic
       localization={localization}
       signUpUrl={!enableClerkSignUp ? '/login' : '/signup'} // Redirect sign-up to sign-in if disabled
     >

@@ -15,7 +15,8 @@ export const getLocale = async (hl?: string): Promise<Locales> => {
 
 export const translation = async (ns: NS = 'common', hl: string) => {
   let i18ns = {};
-  const lng = await getLocale(hl);
+  // @ts-ignore 自有 默认中文减少计算
+  const lng = ('zh-CN' as any) || (await getLocale(hl));
   try {
     let filepath = join(process.cwd(), `locales/${normalizeLocale(lng)}/${ns}.json`);
     const isExist = existsSync(filepath);
