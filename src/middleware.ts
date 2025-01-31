@@ -1,6 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
+import { appEnv } from '@/config/app';
 import { authEnv } from '@/config/auth';
 import NextAuthEdge from '@/libs/next-auth/edge';
 
@@ -56,18 +57,41 @@ const isProtectedRoute = createRouteMatcher([
   // ↓ cloud ↓
 ]);
 
+// 自有功能
+const clerkNextMiddleware = clerkMiddleware(
+  async (auth, req) => {
+    if (isProtectedRoute(req)) await auth.protect();
+  },
+  {
+    // https://github.com/lobehub/lobe-chat/pull/3084
+    clockSkewInMs: 60 * 60 * 1000,
+
+    // 自有功能
+    // debug: true,
+    domain: appEnv.APP_URL,
+
+    signInUrl: '/login',
+    signUpUrl: '/signup',
+  },
+);
+
+// 自有功能
+const beforeClerkAuthMiddleware = (request: NextRequest, ...args: any) => {
+  // Clone the request headers and set a new header `x-hello-from-middleware1`
+  // const requestHeaders = new Headers(request.headers)
+  /**
+   * todo: 目前使用的 CDN 回源头部设置中暂不支持设置 host 和 x-forwarded-host
+   * 回源头部设置 host，这里设置 host 的场景是 clerk 内部使用 host 来做无 cookie 场景（如删除 cookie 时）未使用外部变量
+   * 其内部源码接受 x-forwarded-host || host，所以这里设置 host 来设置真是的 host（非 vercel 提供的域名）
+   */
+  request.headers.set('x-forwarded-host', process.env.HOST!);
+
+  // @ts-ignore
+  return clerkNextMiddleware(request, ...args);
+};
+
 export default authEnv.NEXT_PUBLIC_ENABLE_CLERK_AUTH
-  ? clerkMiddleware(
-      async (auth, req) => {
-        if (isProtectedRoute(req)) await auth.protect();
-      },
-      {
-        // https://github.com/lobehub/lobe-chat/pull/3084
-        clockSkewInMs: 60 * 60 * 1000,
-        signInUrl: '/login',
-        signUpUrl: '/signup',
-      },
-    )
+  ? beforeClerkAuthMiddleware
   : authEnv.NEXT_PUBLIC_ENABLE_NEXT_AUTH
     ? nextAuthMiddleware
     : defaultMiddleware;
