@@ -30,7 +30,7 @@ jobs:
           flush_type: delete
 
       - name: Wait for 30 seconds
-        run: sleep 10
+        run: sleep 30
 
       - name: Tencent Cloud CDN Push Paths Cache
         uses: tardis-ksh/Tencent-Cloud-CDN-Push-Paths-Cache@v1
