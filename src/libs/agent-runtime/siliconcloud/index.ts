@@ -1,8 +1,8 @@
+import { LOBE_DEFAULT_MODEL_LIST } from '@/config/aiModels';
+
 import { AgentRuntimeErrorType } from '../error';
 import { ChatCompletionErrorPayload, ModelProvider } from '../types';
 import { LobeOpenAICompatibleFactory } from '../utils/openaiCompatibleFactory';
-
-import { LOBE_DEFAULT_MODEL_LIST } from '@/config/aiModels';
 
 export interface SiliconCloudModelCard {
   id: string;
@@ -30,7 +30,8 @@ export const LobeSiliconCloudAI = LobeOpenAICompatibleFactory({
           return {
             error: errorResponse.status,
             errorType: AgentRuntimeErrorType.ProviderBizError,
-            message: '请检查 API Key 余额是否充足，或者是否在用未实名的 API Key 访问需要实名的模型。',
+            message:
+              '请检查 API Key 余额是否充足，或者是否在用未实名的 API Key 访问需要实名的模型。',
           };
         }
       }
@@ -71,13 +72,22 @@ export const LobeSiliconCloudAI = LobeOpenAICompatibleFactory({
         'deepseek-ai/deepseek-vl',
       ];
 
+      const reasoningKeywords = ['deepseek-ai/deepseek-r1', 'qwen/qvq', 'qwen/qwq'];
+
       const model = m as unknown as SiliconCloudModelCard;
 
       return {
-        enabled: LOBE_DEFAULT_MODEL_LIST.find((m) => model.id.endsWith(m.id))?.enabled || false,
-        functionCall: functionCallKeywords.some(keyword => model.id.toLowerCase().includes(keyword)) && !model.id.toLowerCase().includes('deepseek-r1'),
+        contextWindowTokens:
+          LOBE_DEFAULT_MODEL_LIST.find((m) => model.id === m.id)?.contextWindowTokens ?? undefined,
+        displayName:
+          LOBE_DEFAULT_MODEL_LIST.find((m) => model.id === m.id)?.displayName ?? undefined,
+        enabled: LOBE_DEFAULT_MODEL_LIST.find((m) => model.id === m.id)?.enabled || false,
+        functionCall:
+          functionCallKeywords.some((keyword) => model.id.toLowerCase().includes(keyword)) &&
+          !model.id.toLowerCase().includes('deepseek-r1'),
         id: model.id,
-        vision: visionKeywords.some(keyword => model.id.toLowerCase().includes(keyword)),
+        reasoning: reasoningKeywords.some((keyword) => model.id.toLowerCase().includes(keyword)),
+        vision: visionKeywords.some((keyword) => model.id.toLowerCase().includes(keyword)),
       };
     },
   },
