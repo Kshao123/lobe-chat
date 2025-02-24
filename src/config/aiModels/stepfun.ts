@@ -1,5 +1,7 @@
 import { AIChatModelCard } from '@/types/aiModel';
 
+// https://platform.stepfun.com/docs/pricing/details
+
 const stepfunChatModels: AIChatModelCard[] = [
   {
     abilities: {
@@ -101,12 +103,12 @@ const stepfunChatModels: AIChatModelCard[] = [
       functionCall: true,
     },
     contextWindowTokens: 8000,
-    description: 
+    description:
       '基于新一代自研Attention架构MFA的极速大模型，用极低成本达到和step1类似的效果，同时保持了更高的吞吐和更快响应时延。能够处理通用任务，在代码能力上具备特长。',
     displayName: 'Step 2 Mini',
     enabled: true,
     id: 'step-2-mini',
-      pricing: {
+    pricing: {
       currency: 'CNY',
       input: 1,
       output: 2,
@@ -196,6 +198,24 @@ const stepfunChatModels: AIChatModelCard[] = [
       input: 8,
       output: 35,
     },
+    type: 'chat',
+  },
+  {
+    abilities: {
+      vision: true,
+    },
+    contextWindowTokens: 32_000,
+    description:
+      '该模型拥有强大的图像理解能力，在数理、代码领域强于1o。模型比1o更小，输出速度更快。',
+    displayName: 'Step 1o Turbo Vision',
+    enabled: true,
+    id: 'step-1o-turbo-vision',
+    pricing: {
+      currency: 'CNY',
+      input: 8,
+      output: 35,
+    },
+    releasedAt: '2025-02-14',
     type: 'chat',
   },
 ];
