@@ -188,6 +188,7 @@ describe('fetchSSE', () => {
       await fetchSSE('/', {
         onMessageHandle: mockOnMessageHandle,
         onFinish: mockOnFinish,
+        smoothing: false,
       });
 
       expect(mockOnMessageHandle).toHaveBeenNthCalledWith(1, { text: 'Hello', type: 'reasoning' });
