@@ -46,7 +46,8 @@ const Clerk = memo(({ children }: PropsWithChildren) => {
       appearance={updatedAppearance}
       // 自有 https://www.npmjs.com/package/@clerk/clerk-js?activeTab=readme
       // clerkJSUrl="https://npm.akass.cn/@clerk/clerk-js@5.52.2/dist/clerk.browser.js"
-      clerkJSUrl="https://s4.zstatic.net/ajax/libs/clerk-js/5.58.1/clerk.browser.min.js"
+      // clerkJSUrl="https://s4.zstatic.net/ajax/libs/clerk-js/5.57.1/clerk.browser.min.js"
+      clerkJSUrl="https://clerk.lobechat.com/npm/@clerk/clerk-js@5/dist/clerk.browser.js"
       dynamic
       localization={localization}
       signUpUrl={!enableClerkSignUp ? '/login' : '/signup'} // Redirect sign-up to sign-in if disabled
