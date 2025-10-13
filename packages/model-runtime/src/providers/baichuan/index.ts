@@ -1,7 +1,11 @@
 import type { ChatModelCard } from '@lobechat/types';
 import { ModelProvider } from 'model-bank';
 
-import { createOpenAICompatibleRuntime } from '../../core/openaiCompatibleFactory';
+import {
+  OpenAICompatibleFactoryOptions,
+  createOpenAICompatibleRuntime,
+} from '../../core/openaiCompatibleFactory';
+import { resolveParameters } from '../../core/parameterResolver';
 import { ChatStreamPayload } from '../../types';
 
 export interface BaichuanModelCard {
@@ -12,7 +16,7 @@ export interface BaichuanModelCard {
   model_show_name: string;
 }
 
-export const LobeBaichuanAI = createOpenAICompatibleRuntime({
+export const params = {
   baseURL: 'https://api.baichuan-ai.com/v1',
   chatCompletion: {
     handlePayload: (payload: ChatStreamPayload) => {
@@ -31,11 +35,12 @@ export const LobeBaichuanAI = createOpenAICompatibleRuntime({
           ]
         : tools;
 
+      // Resolve parameters with normalization
+      const resolvedParams = resolveParameters({ temperature }, { normalizeTemperature: true });
+
       return {
         ...rest,
-        // [baichuan] frequency_penalty must be between 1 and 2.
-        frequency_penalty: undefined,
-        temperature: temperature !== undefined ? temperature / 2 : undefined,
+        temperature: resolvedParams.temperature,
         tools: baichuanTools,
       } as any;
     },
@@ -69,4 +74,6 @@ export const LobeBaichuanAI = createOpenAICompatibleRuntime({
       .filter(Boolean) as ChatModelCard[];
   },
   provider: ModelProvider.Baichuan,
-});
+} satisfies OpenAICompatibleFactoryOptions;
+
+export const LobeBaichuanAI = createOpenAICompatibleRuntime(params);
