@@ -8,10 +8,11 @@ import { createGoogleImage } from './createImage';
 
 const provider = 'google';
 const bizErrorType = 'ProviderBizError';
+const noImageErrorType = 'ProviderNoImageGenerated';
 const invalidErrorType = 'InvalidProviderAPIKey';
 
 // Mock the console.error to avoid polluting test output
-vi.spyOn(console, 'error').mockImplementation(() => {});
+vi.spyOn(console, 'error').mockImplementation(() => { });
 
 let mockClient: GoogleGenAI;
 
@@ -201,7 +202,7 @@ describe('createGoogleImage', () => {
         // Act & Assert - Test error behavior rather than specific text
         await expect(createGoogleImage(mockClient, provider, payload)).rejects.toEqual(
           expect.objectContaining({
-            errorType: bizErrorType,
+            errorType: noImageErrorType,
             provider,
           }),
         );
@@ -224,7 +225,7 @@ describe('createGoogleImage', () => {
         // Act & Assert
         await expect(createGoogleImage(mockClient, provider, payload)).rejects.toEqual(
           expect.objectContaining({
-            errorType: bizErrorType,
+            errorType: noImageErrorType,
             provider,
           }),
         );
@@ -251,7 +252,7 @@ describe('createGoogleImage', () => {
         // Act & Assert
         await expect(createGoogleImage(mockClient, provider, payload)).rejects.toEqual(
           expect.objectContaining({
-            errorType: bizErrorType,
+            errorType: noImageErrorType,
             provider,
           }),
         );
@@ -360,7 +361,7 @@ describe('createGoogleImage', () => {
       vi.spyOn(mockClient.models, 'generateContent').mockResolvedValue(mockContentResponse as any);
 
       const payload: CreateImagePayload = {
-        model: 'gemini-2.5-flash-image-preview:image',
+        model: 'gemini-2.5-flash-image:image',
         params: {
           prompt: 'Create a beautiful sunset landscape',
         },
@@ -377,7 +378,7 @@ describe('createGoogleImage', () => {
             parts: [{ text: 'Create a beautiful sunset landscape' }],
           },
         ],
-        model: 'gemini-2.5-flash-image-preview',
+        model: 'gemini-2.5-flash-image',
         config: {
           responseModalities: ['Image'],
         },
@@ -413,7 +414,7 @@ describe('createGoogleImage', () => {
       vi.spyOn(mockClient.models, 'generateContent').mockResolvedValue(mockContentResponse as any);
 
       const payload: CreateImagePayload = {
-        model: 'gemini-2.5-flash-image-preview:image',
+        model: 'gemini-2.5-flash-image:image',
         params: {
           prompt: 'Add a red rose to this image',
           imageUrl: `data:image/png;base64,${inputImageBase64}`,
@@ -439,7 +440,7 @@ describe('createGoogleImage', () => {
             ],
           },
         ],
-        model: 'gemini-2.5-flash-image-preview',
+        model: 'gemini-2.5-flash-image',
         config: {
           responseModalities: ['Image'],
         },
@@ -481,7 +482,7 @@ describe('createGoogleImage', () => {
       vi.spyOn(mockClient.models, 'generateContent').mockResolvedValue(mockContentResponse as any);
 
       const payload: CreateImagePayload = {
-        model: 'gemini-2.5-flash-image-preview:image',
+        model: 'gemini-2.5-flash-image:image',
         params: {
           prompt: 'Change the background to blue sky',
           imageUrl: 'https://example.com/image.jpg',
@@ -510,7 +511,7 @@ describe('createGoogleImage', () => {
             ],
           },
         ],
-        model: 'gemini-2.5-flash-image-preview',
+        model: 'gemini-2.5-flash-image',
         config: {
           responseModalities: ['Image'],
         },
@@ -544,7 +545,7 @@ describe('createGoogleImage', () => {
       vi.spyOn(mockClient.models, 'generateContent').mockResolvedValue(mockContentResponse as any);
 
       const payload: CreateImagePayload = {
-        model: 'gemini-2.5-flash-image-preview:image',
+        model: 'gemini-2.5-flash-image:image',
         params: {
           prompt: 'Generate a colorful abstract pattern',
           imageUrl: null,
@@ -562,7 +563,7 @@ describe('createGoogleImage', () => {
             parts: [{ text: 'Generate a colorful abstract pattern' }],
           },
         ],
-        model: 'gemini-2.5-flash-image-preview',
+        model: 'gemini-2.5-flash-image',
         config: {
           responseModalities: ['Image'],
         },
@@ -593,7 +594,7 @@ describe('createGoogleImage', () => {
         );
 
         const payload: CreateImagePayload = {
-          model: 'gemini-2.5-flash-image-preview:image',
+          model: 'gemini-2.5-flash-image:image',
           params: {
             prompt: 'Create inappropriate content',
           },
@@ -602,7 +603,7 @@ describe('createGoogleImage', () => {
         // Act & Assert
         await expect(createGoogleImage(mockClient, provider, payload)).rejects.toEqual(
           expect.objectContaining({
-            errorType: bizErrorType,
+            errorType: noImageErrorType,
             provider,
           }),
         );
@@ -618,7 +619,7 @@ describe('createGoogleImage', () => {
         );
 
         const payload: CreateImagePayload = {
-          model: 'gemini-2.5-flash-image-preview:image',
+          model: 'gemini-2.5-flash-image:image',
           params: {
             prompt: 'Generate an image',
           },
@@ -627,7 +628,7 @@ describe('createGoogleImage', () => {
         // Act & Assert
         await expect(createGoogleImage(mockClient, provider, payload)).rejects.toEqual(
           expect.objectContaining({
-            errorType: bizErrorType,
+            errorType: noImageErrorType,
             provider,
           }),
         );
@@ -636,7 +637,7 @@ describe('createGoogleImage', () => {
       it('should throw error for unsupported image URL format', async () => {
         // Arrange
         const payload: CreateImagePayload = {
-          model: 'gemini-2.5-flash-image-preview:image',
+          model: 'gemini-2.5-flash-image:image',
           params: {
             prompt: 'Edit this image',
             imageUrl: 'ftp://example.com/image.jpg',

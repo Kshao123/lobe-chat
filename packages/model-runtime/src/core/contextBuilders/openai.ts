@@ -5,13 +5,21 @@ import { disableStreamModels, systemToUserModels } from '../../const/models';
 import { ChatStreamPayload, OpenAIChatMessage } from '../../types';
 import { parseDataUri } from '../../utils/uriParser';
 
+type ConvertMessageContentOptions = {
+  forceImageBase64?: boolean;
+};
+
 export const convertMessageContent = async (
   content: OpenAI.ChatCompletionContentPart,
+  options?: ConvertMessageContentOptions,
 ): Promise<OpenAI.ChatCompletionContentPart> => {
   if (content.type === 'image_url') {
     const { type } = parseDataUri(content.image_url.url);
 
-    if (type === 'url' && process.env.LLM_VISION_IMAGE_USE_BASE64 === '1') {
+    const shouldUseBase64 =
+      options?.forceImageBase64 || process.env.LLM_VISION_IMAGE_USE_BASE64 === '1';
+
+    if (type === 'url' && shouldUseBase64) {
       const { base64, mimeType } = await imageUrlToBase64(content.image_url.url);
 
       return {
@@ -24,7 +32,10 @@ export const convertMessageContent = async (
   return content;
 };
 
-export const convertOpenAIMessages = async (messages: OpenAI.ChatCompletionMessageParam[]) => {
+export const convertOpenAIMessages = async (
+  messages: OpenAI.ChatCompletionMessageParam[],
+  options?: ConvertMessageContentOptions,
+) => {
   return (await Promise.all(
     messages.map(async (message) => {
       const msg = message as any;
@@ -37,7 +48,7 @@ export const convertOpenAIMessages = async (messages: OpenAI.ChatCompletionMessa
             ? message.content
             : await Promise.all(
                 (message.content || []).map((c) =>
-                  convertMessageContent(c as OpenAI.ChatCompletionContentPart),
+                  convertMessageContent(c as OpenAI.ChatCompletionContentPart, options),
                 ),
               ),
         role: msg.role,
@@ -49,15 +60,20 @@ export const convertOpenAIMessages = async (messages: OpenAI.ChatCompletionMessa
       if (msg.tool_call_id !== undefined) result.tool_call_id = msg.tool_call_id;
       if (msg.function_call !== undefined) result.function_call = msg.function_call;
 
-      // it's compatible for DeepSeek
+      // it's compatible for DeepSeek & Moonshot
       if (msg.reasoning_content !== undefined) result.reasoning_content = msg.reasoning_content;
+      // MiniMax uses reasoning_details for historical thinking, so forward it unchanged
+      if (msg.reasoning_details !== undefined) result.reasoning_details = msg.reasoning_details;
 
       return result;
     }),
   )) as OpenAI.ChatCompletionMessageParam[];
 };
 
-export const convertOpenAIResponseInputs = async (messages: OpenAIChatMessage[]) => {
+export const convertOpenAIResponseInputs = async (
+  messages: OpenAIChatMessage[],
+  options?: ConvertMessageContentOptions,
+) => {
   let input: OpenAI.Responses.ResponseInputItem[] = [];
   await Promise.all(
     messages.map(async (message) => {
@@ -111,7 +127,10 @@ export const convertOpenAIResponseInputs = async (messages: OpenAIChatMessage[])
                     return { ...c, type: 'input_text' };
                   }
 
-                  const image = await convertMessageContent(c as OpenAI.ChatCompletionContentPart);
+                  const image = await convertMessageContent(
+                    c as OpenAI.ChatCompletionContentPart,
+                    options,
+                  );
                   return {
                     image_url: (image as OpenAI.ChatCompletionContentPartImage).image_url?.url,
                     type: 'input_image',
@@ -134,6 +153,10 @@ export const pruneReasoningPayload = (payload: ChatStreamPayload) => {
   const shouldStream = !disableStreamModels.has(payload.model);
   const { stream_options, ...cleanedPayload } = payload as any;
 
+  // When reasoning_effort is 'none', allow user-defined temperature/top_p
+  const effort = payload.reasoning?.effort || payload.reasoning_effort;
+  const isEffortNone = effort === 'none';
+
   return {
     ...cleanedPayload,
     frequency_penalty: 0,
@@ -150,8 +173,14 @@ export const pruneReasoningPayload = (payload: ChatStreamPayload) => {
     stream: shouldStream,
     // Only include stream_options when stream is enabled
     ...(shouldStream && stream_options && { stream_options }),
-    temperature: 1,
-    top_p: 1,
+
+    /**
+     *  In openai docs: https://platform.openai.com/docs/guides/latest-model#gpt-5-2-parameter-compatibility
+     *  Fields like `top_p`, `temperature` and `logprobs` only supported to
+     *  GPT-5 series (e.g. 5-mini 5-nano ) when reasoning effort is none
+     */
+    temperature: isEffortNone ? payload.temperature : undefined,
+    top_p: isEffortNone ? payload.top_p : undefined,
   };
 };
 

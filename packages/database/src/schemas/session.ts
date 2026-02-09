@@ -29,6 +29,7 @@ export const sessionGroups = pgTable(
       table.clientId,
       table.userId,
     ),
+    userIdIdx: index('session_groups_user_id_idx').on(table.userId),
   }),
 );
 
@@ -70,6 +71,8 @@ export const sessions = pgTable(
 
     index('sessions_user_id_idx').on(t.userId),
     index('sessions_id_user_id_idx').on(t.id, t.userId),
+    index('sessions_user_id_updated_at_idx').on(t.userId, t.updatedAt),
+    index('sessions_group_id_idx').on(t.groupId),
   ],
 );
 

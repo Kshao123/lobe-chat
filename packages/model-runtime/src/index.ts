@@ -1,3 +1,4 @@
+export * from './const/models';
 export * from './core/BaseAI';
 export { pruneReasoningPayload } from './core/contextBuilders/openai';
 export { ModelRuntime } from './core/ModelRuntime';
@@ -17,6 +18,7 @@ export { LobeComfyUI } from './providers/comfyui';
 export { LobeDeepSeekAI } from './providers/deepseek';
 export { LobeGoogleAI } from './providers/google';
 export { LobeGroq } from './providers/groq';
+export { LobeHubAI } from './providers/lobehub';
 export { LobeMinimaxAI } from './providers/minimax';
 export { LobeMistralAI } from './providers/mistral';
 export { LobeMoonshotAI } from './providers/moonshot';
@@ -31,6 +33,8 @@ export { LobeQwenAI } from './providers/qwen';
 export { LobeStepfunAI } from './providers/stepfun';
 export { LobeTogetherAI } from './providers/togetherai';
 export { LobeVolcengineAI } from './providers/volcengine';
+export { LobeXiaomiMiMoAI } from './providers/xiaomimimo';
+export { LobeZenMuxAI } from './providers/zenmux';
 export { LobeZeroOneAI } from './providers/zeroone';
 export { LobeZhipuAI } from './providers/zhipu';
 export * from './types';
@@ -40,4 +44,3 @@ export { AgentRuntimeError } from './utils/createError';
 export { getModelPropertyWithFallback } from './utils/getFallbackModelProperty';
 export { getModelPricing } from './utils/getModelPricing';
 export { parseDataUri } from './utils/uriParser';
-

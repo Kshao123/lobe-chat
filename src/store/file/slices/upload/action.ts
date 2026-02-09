@@ -1,15 +1,15 @@
+import { LOBE_CHAT_CLOUD } from '@lobechat/business-const';
 import { t } from 'i18next';
 import { sha256 } from 'js-sha256';
-import { StateCreator } from 'zustand/vanilla';
+import { type StateCreator } from 'zustand/vanilla';
 
-import { message } from '@/components/AntdStaticMethods';
-import { LOBE_CHAT_CLOUD } from '@/const/branding';
+import { message, notification } from '@/components/AntdStaticMethods';
 import { fileService } from '@/services/file';
 import { uploadService } from '@/services/upload';
-import { FileMetadata, UploadFileItem } from '@/types/files';
+import { type FileMetadata, type UploadFileItem } from '@/types/files';
 import { getImageDimensions } from '@/utils/client/imageDimensions';
 
-import { FileStore } from '../../store';
+import { type FileStore } from '../../store';
 
 type OnStatusUpdate = (
   data:
@@ -25,15 +25,21 @@ type OnStatusUpdate = (
 ) => void;
 
 interface UploadWithProgressParams {
+  abortController?: AbortController;
   file: File;
   knowledgeBaseId?: string;
   onStatusUpdate?: OnStatusUpdate;
+  parentId?: string;
   /**
    * Optional flag to indicate whether to skip the file type check.
    * When set to `true`, any file type checks will be bypassed.
    * Default is `false`, which means file type checks will be performed.
    */
   skipCheckFileType?: boolean;
+  /**
+   * Optional source identifier for the file (e.g., 'page-editor', 'image_generation')
+   */
+  source?: string;
 }
 
 interface UploadWithProgressResult {
@@ -81,89 +87,113 @@ export const createFileUploadSlice: StateCreator<
     });
     return { ...res, dimensions, filename: metadata.filename };
   },
-  uploadWithProgress: async ({ file, onStatusUpdate, knowledgeBaseId, skipCheckFileType }) => {
-    const fileArrayBuffer = await file.arrayBuffer();
+  uploadWithProgress: async ({
+    file,
+    onStatusUpdate,
+    knowledgeBaseId,
+    skipCheckFileType,
+    parentId,
+    source,
+    abortController,
+  }) => {
+    try {
+      const fileArrayBuffer = await file.arrayBuffer();
 
-    // 1. extract image dimensions if applicable
-    const dimensions = await getImageDimensions(file);
+      // 1. extract image dimensions if applicable
+      const dimensions = await getImageDimensions(file);
 
-    // 2. check file hash
-    const hash = sha256(fileArrayBuffer);
+      // 2. check file hash
+      const hash = sha256(fileArrayBuffer);
 
-    const checkStatus = await fileService.checkFileHash(hash);
-    let metadata: FileMetadata;
+      const checkStatus = await fileService.checkFileHash(hash);
+      let metadata: FileMetadata;
 
-    // 3. if file exist, just skip upload
-    if (checkStatus.isExist) {
-      metadata = checkStatus.metadata as FileMetadata;
+      // 3. if file exist, just skip upload
+      if (checkStatus.isExist) {
+        metadata = checkStatus.metadata as FileMetadata;
+        onStatusUpdate?.({
+          id: file.name,
+          type: 'updateFile',
+          value: { status: 'processing', uploadState: { progress: 100, restTime: 0, speed: 0 } },
+        });
+      }
+      // 3. if file don't exist, need upload files
+      else {
+        const { data, success } = await uploadService.uploadFileToS3(file, {
+          abortController,
+          onNotSupported: () => {
+            onStatusUpdate?.({ id: file.name, type: 'removeFile' });
+            message.info({
+              content: t('upload.fileOnlySupportInServerMode', {
+                cloud: LOBE_CHAT_CLOUD,
+                ext: file.name.split('.').pop(),
+                ns: 'error',
+              }),
+              duration: 5,
+            });
+          },
+          onProgress: (status, upload) => {
+            onStatusUpdate?.({
+              id: file.name,
+              type: 'updateFile',
+              value: { status: status === 'success' ? 'processing' : status, uploadState: upload },
+            });
+          },
+          skipCheckFileType,
+        });
+        if (!success) return;
+
+        metadata = data;
+      }
+
+      // 4. use more powerful file type detector to get file type
+      let fileType = file.type;
+
+      if (!file.type) {
+        const { fileTypeFromBuffer } = await import('file-type');
+
+        const type = await fileTypeFromBuffer(fileArrayBuffer);
+        fileType = type?.mime || 'text/plain';
+      }
+
+      // 5. create file to db
+      const data = await fileService.createFile(
+        {
+          fileType,
+          hash,
+          metadata,
+          name: file.name,
+          parentId,
+          size: file.size,
+          source,
+          url: metadata.path || checkStatus.url,
+        },
+        knowledgeBaseId,
+      );
+
       onStatusUpdate?.({
         id: file.name,
         type: 'updateFile',
-        value: { status: 'processing', uploadState: { progress: 100, restTime: 0, speed: 0 } },
-      });
-    }
-    // 3. if file don't exist, need upload files
-    else {
-      const { data, success } = await uploadService.uploadFileToS3(file, {
-        onNotSupported: () => {
-          onStatusUpdate?.({ id: file.name, type: 'removeFile' });
-          message.info({
-            content: t('upload.fileOnlySupportInServerMode', {
-              cloud: LOBE_CHAT_CLOUD,
-              ext: file.name.split('.').pop(),
-              ns: 'error',
-            }),
-            duration: 5,
-          });
+        value: {
+          fileUrl: data.url,
+          id: data.id,
+          status: 'success',
+          uploadState: { progress: 100, restTime: 0, speed: 0 },
         },
-        onProgress: (status, upload) => {
-          onStatusUpdate?.({
-            id: file.name,
-            type: 'updateFile',
-            value: { status: status === 'success' ? 'processing' : status, uploadState: upload },
-          });
-        },
-        skipCheckFileType,
       });
-      if (!success) return;
 
-      metadata = data;
+      return { ...data, dimensions, filename: file.name };
+    } catch (error) {
+      // Handle file storage plan limit error
+      if ((error as any)?.message?.includes('beyond the plan limit')) {
+        onStatusUpdate?.({ id: file.name, type: 'removeFile' });
+        notification.error({
+          description: t('upload.storageLimitExceeded', { ns: 'error' }),
+          message: t('upload.uploadFailed', { ns: 'error' }),
+        });
+        return;
+      }
+      throw error;
     }
-
-    // 4. use more powerful file type detector to get file type
-    let fileType = file.type;
-
-    if (!file.type) {
-      const { fileTypeFromBuffer } = await import('file-type');
-
-      const type = await fileTypeFromBuffer(fileArrayBuffer);
-      fileType = type?.mime || 'text/plain';
-    }
-
-    // 5. create file to db
-    const data = await fileService.createFile(
-      {
-        fileType,
-        hash,
-        metadata,
-        name: file.name,
-        size: file.size,
-        url: metadata.path || checkStatus.url,
-      },
-      knowledgeBaseId,
-    );
-
-    onStatusUpdate?.({
-      id: file.name,
-      type: 'updateFile',
-      value: {
-        fileUrl: data.url,
-        id: data.id,
-        status: 'success',
-        uploadState: { progress: 100, restTime: 0, speed: 0 },
-      },
-    });
-
-    return { ...data, dimensions, filename: file.name };
   },
 });

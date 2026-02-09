@@ -1,13 +1,11 @@
 'use client';
 
-import { Dropdown, Icon, type MenuProps, Tag } from '@lobehub/ui';
+import { Center, DropdownMenu, Icon, type MenuProps, Tag } from '@lobehub/ui';
 import isEqual from 'fast-deep-equal';
 import { LucideToyBrick } from 'lucide-react';
 import { memo } from 'react';
-import { Center } from 'react-layout-kit';
 
 import Avatar from '@/components/Plugins/PluginAvatar';
-import { featureFlagsSelectors, useServerConfigStore } from '@/store/serverConfig';
 import { pluginHelpers, useToolStore } from '@/store/tool';
 import { toolSelectors } from '@/store/tool/selectors';
 
@@ -18,8 +16,7 @@ export interface PluginTagProps {
 }
 
 const PluginTag = memo<PluginTagProps>(({ plugins }) => {
-  const { showDalle } = useServerConfigStore(featureFlagsSelectors);
-  const list = useToolStore(toolSelectors.metaList(showDalle), isEqual);
+  const list = useToolStore(toolSelectors.metaList, isEqual);
 
   const displayPlugin = useToolStore(toolSelectors.getMetaById(plugins[0]), isEqual);
 
@@ -51,7 +48,7 @@ const PluginTag = memo<PluginTagProps>(({ plugins }) => {
   const count = plugins.length;
 
   return (
-    <Dropdown menu={{ items }}>
+    <DropdownMenu items={items}>
       <div>
         <Tag>
           {<Icon icon={LucideToyBrick} />}
@@ -59,7 +56,7 @@ const PluginTag = memo<PluginTagProps>(({ plugins }) => {
           {count > 1 && <div>({plugins.length - 1}+)</div>}
         </Tag>
       </div>
-    </Dropdown>
+    </DropdownMenu>
   );
 });
 

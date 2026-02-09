@@ -1,3 +1,4 @@
+/* eslint-disable sort-keys-fix/sort-keys-fix, typescript-sort-keys/interface */
 // Define types for local file operations
 export interface LocalFileItem {
   contentType?: string;
@@ -15,8 +16,40 @@ export interface LocalFileItem {
   type: string;
 }
 
+export type ListLocalFileSortBy = 'name' | 'modifiedTime' | 'createdTime' | 'size';
+export type ListLocalFileSortOrder = 'asc' | 'desc';
+
 export interface ListLocalFileParams {
+  /**
+   * Maximum number of files to return
+   * @default 100
+   */
+  limit?: number;
+  /**
+   * Directory path to list
+   */
   path: string;
+  /**
+   * Field to sort by
+   * @default 'modifiedTime'
+   */
+  sortBy?: ListLocalFileSortBy;
+  /**
+   * Sort order
+   * @default 'desc'
+   */
+  sortOrder?: ListLocalFileSortOrder;
+}
+
+export interface ListLocalFilesResult {
+  /**
+   * List of files (truncated to limit)
+   */
+  files: LocalFileItem[];
+  /**
+   * Total count of files before truncation
+   */
+  totalCount: number;
 }
 
 export interface MoveLocalFileParams {
@@ -47,6 +80,7 @@ export interface RenameLocalFileResult {
 }
 
 export interface LocalReadFileParams {
+  fullContent?: boolean;
   loc?: [number, number];
   path: string;
 }
@@ -57,12 +91,12 @@ export interface LocalReadFilesParams {
 
 export interface WriteLocalFileParams {
   /**
-   * 要写入的内容
+   * Content to write
    */
   content: string;
 
   /**
-   * 要写入的文件路径
+   * File path to write to
    */
   path: string;
 }
@@ -96,8 +130,31 @@ export interface LocalReadFileResult {
 }
 
 export interface LocalSearchFilesParams {
-  directory?: string;
-  keywords: string; // Optional directory to limit search
+  // Basic search
+  keywords: string;
+
+  // Path options
+  directory?: string; // Limit search to specific directory
+  exclude?: string[]; // Paths to exclude from search
+
+  // File type options
+  fileTypes?: string[]; // File extensions to filter (e.g., ['pdf', 'docx'])
+
+  // Content options
+  contentContains?: string; // Search for files containing specific text
+
+  // Time options (ISO 8601 date strings)
+  createdAfter?: string;
+  createdBefore?: string;
+  modifiedAfter?: string;
+  modifiedBefore?: string;
+
+  // Result options
+  detailed?: boolean;
+  limit?: number;
+  liveUpdate?: boolean;
+  sortBy?: 'name' | 'date' | 'size';
+  sortDirection?: 'asc' | 'desc';
 }
 
 export interface OpenLocalFileParams {
@@ -193,7 +250,37 @@ export interface EditLocalFileParams {
 }
 
 export interface EditLocalFileResult {
+  diffText?: string;
   error?: string;
+  linesAdded?: number;
+  linesDeleted?: number;
   replacements: number;
   success: boolean;
+}
+
+// Save Dialog types
+export interface ShowSaveDialogParams {
+  /**
+   * Default file name
+   */
+  defaultPath?: string;
+  /**
+   * File type filters
+   */
+  filters?: { extensions: string[]; name: string }[];
+  /**
+   * Dialog title
+   */
+  title?: string;
+}
+
+export interface ShowSaveDialogResult {
+  /**
+   * Whether the dialog was cancelled
+   */
+  canceled: boolean;
+  /**
+   * The selected file path (undefined if cancelled)
+   */
+  filePath?: string;
 }
