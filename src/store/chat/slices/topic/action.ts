@@ -11,10 +11,12 @@ import useSWR from 'swr';
 import { message } from '@/components/AntdStaticMethods';
 import { LOADING_FLAT } from '@/const/message';
 import { mutate, useClientDataSWRWithSync } from '@/libs/swr';
+import { cronKeys, topicKeys } from '@/libs/swr/keys';
 import { chatService } from '@/services/chat';
 import { messageService } from '@/services/message';
 import { topicService } from '@/services/topic';
 import { type ChatStore } from '@/store/chat';
+import { evictMessageCache } from '@/store/chat/utils/evictMessageCache';
 import { topicMapKey } from '@/store/chat/utils/topicMapKey';
 import { useGlobalStore } from '@/store/global';
 import { type StoreSetter } from '@/store/types';
@@ -37,9 +39,6 @@ import { topicSelectors } from './selectors';
 
 const n = setNamespace('t');
 
-const SWR_USE_FETCH_TOPIC = 'SWR_USE_FETCH_TOPIC';
-const SWR_USE_FETCH_AGENT_TOPICS_VIEW = 'SWR_USE_FETCH_AGENT_TOPICS_VIEW';
-const SWR_USE_SEARCH_TOPIC = 'SWR_USE_SEARCH_TOPIC';
 type CronTopicsGroupWithJobInfo = {
   cronJob: unknown;
   cronJobId: string;
@@ -267,7 +266,7 @@ export class ChatTopicActionImpl {
     if (!activeAgentId) return;
 
     await mutate(
-      ['cronTopicsWithJobInfo', activeAgentId],
+      cronKeys.topicsWithJobInfo(activeAgentId),
       (groups?: CronTopicsGroupWithJobInfo[]) => {
         if (!Array.isArray(groups)) return groups;
 
@@ -404,18 +403,14 @@ export class ChatTopicActionImpl {
 
     return useClientDataSWRWithSync<{ items: ChatTopic[]; total: number }>(
       enable && hasValidContainer
-        ? [
-            SWR_USE_FETCH_TOPIC,
-            containerKey,
-            {
-              isInbox,
-              pageSize,
-              ...(effectiveExcludeTriggers ? { excludeTriggers: effectiveExcludeTriggers } : {}),
-              ...(effectiveExcludeStatuses ? { excludeStatuses: effectiveExcludeStatuses } : {}),
-              ...(sortBy ? { sortBy } : {}),
-              ...(withDetails ? { withDetails: true } : {}),
-            },
-          ]
+        ? topicKeys.list(containerKey, {
+            isInbox,
+            pageSize,
+            ...(effectiveExcludeTriggers ? { excludeTriggers: effectiveExcludeTriggers } : {}),
+            ...(effectiveExcludeStatuses ? { excludeStatuses: effectiveExcludeStatuses } : {}),
+            ...(sortBy ? { sortBy } : {}),
+            ...(withDetails ? { withDetails: true } : {}),
+          })
         : null,
       async () => {
         // agentId, groupId, isInbox, pageSize come from the outer scope closure
@@ -545,11 +540,10 @@ export class ChatTopicActionImpl {
 
     return useClientDataSWRWithSync<{ items: ChatTopic[]; total: number }>(
       enable && hasValidAgent
-        ? [
-            SWR_USE_FETCH_AGENT_TOPICS_VIEW,
-            containerKey,
-            { pageSize, ...(withDetails ? { withDetails: true } : {}) },
-          ]
+        ? topicKeys.agentView(containerKey, {
+            pageSize,
+            ...(withDetails ? { withDetails: true } : {}),
+          })
         : null,
       async () => {
         if (!agentId) return { items: [], total: 0 };
@@ -689,8 +683,7 @@ export class ChatTopicActionImpl {
     if (!activeAgentId) return;
     const containerKey = topicMapKey({ agentId: activeAgentId });
     await mutate(
-      (key) =>
-        Array.isArray(key) && key[0] === SWR_USE_FETCH_AGENT_TOPICS_VIEW && key[1] === containerKey,
+      (key) => Array.isArray(key) && key[0] === topicKeys.agentView.root && key[1] === containerKey,
     );
   };
 
@@ -783,7 +776,7 @@ export class ChatTopicActionImpl {
     } = {},
   ): SWRResponse<ChatTopic[]> => {
     return useSWR<ChatTopic[]>(
-      keywords ? [SWR_USE_SEARCH_TOPIC, keywords, agentId, groupId] : null,
+      keywords ? topicKeys.search(keywords, agentId, groupId) : null,
       ([, keywords, agentId, groupId]: [string, string, string | undefined, string | undefined]) =>
         topicService.searchTopics(keywords, agentId, groupId),
       {
@@ -837,7 +830,7 @@ export class ChatTopicActionImpl {
     );
 
     if (activeAgentId) {
-      this.#get().clearUnreadCompletedTopic(activeAgentId, id ?? null);
+      this.#get().markTopicRead({ agentId: activeAgentId, topicId: id ?? null });
     }
 
     if (opts.skipRefreshMessage) return;
@@ -853,19 +846,20 @@ export class ChatTopicActionImpl {
   };
 
   removeSessionTopics = async (): Promise<void> => {
-    const { switchTopic, activeAgentId, refreshTopic, clearUnreadCompletedAgent } = this.#get();
+    const { switchTopic, activeAgentId, refreshTopic } = this.#get();
     if (!activeAgentId) return;
 
     await topicService.removeTopicsByAgentId(activeAgentId);
-    clearUnreadCompletedAgent(activeAgentId);
     await refreshTopic();
+    // drop every deleted topic's message cache (all belong to this agent)
+    void evictMessageCache((ctx) => ctx.agentId === activeAgentId);
 
     // switch to default topic
     switchTopic(null);
   };
 
   removeGroupTopics = async (groupId: string): Promise<void> => {
-    const { switchTopic, refreshTopic, purgeUnreadTopics } = this.#get();
+    const { switchTopic, refreshTopic } = this.#get();
 
     // Get topics for this specific group from the topic map using topicMapKey
     const key = topicMapKey({ groupId });
@@ -874,10 +868,12 @@ export class ChatTopicActionImpl {
 
     if (topicIds.length > 0) {
       await topicService.batchRemoveTopics(topicIds);
-      purgeUnreadTopics(topicIds);
     }
 
     await refreshTopic();
+    // drop the deleted topics' message caches
+    const removed = new Set(topicIds);
+    void evictMessageCache((ctx) => !!ctx.topicId && removed.has(ctx.topicId));
 
     // switch to default topic
     switchTopic(null);
@@ -887,43 +883,62 @@ export class ChatTopicActionImpl {
     const { refreshTopic } = this.#get();
 
     await topicService.removeAllTopic();
-    this.#set({ unreadCompletedTopicsByAgent: {} }, false, n('removeAllTopics/clearUnread'));
     await refreshTopic();
+    // every topic is gone — wipe all cached message lists
+    void evictMessageCache(() => true);
   };
 
   removeTopic = async (id: string): Promise<void> => {
-    const {
-      activeAgentId,
-      activeGroupId,
-      activeTopicId,
-      switchTopic,
-      refreshTopic,
-      purgeUnreadTopics,
-    } = this.#get();
+    const { activeAgentId, activeGroupId, activeTopicId, switchTopic, refreshTopic } = this.#get();
     // Allow deletion when either agentId or groupId is active
     if (!activeAgentId && !activeGroupId) return;
 
     // remove topic
     await topicService.removeTopic(id);
     this.#get().internal_dispatchTopic({ type: 'deleteTopic', id }, 'removeTopic');
-    purgeUnreadTopics([id]);
     await refreshTopic();
+    // drop the deleted topic's message cache so it doesn't orphan in IndexedDB
+    void evictMessageCache((ctx) => ctx.topicId === id);
 
     // switch back to default topic
     if (activeTopicId === id) switchTopic(null);
   };
 
   removeUnstarredTopic = async (): Promise<void> => {
-    const { refreshTopic, switchTopic, purgeUnreadTopics } = this.#get();
+    const { refreshTopic, switchTopic } = this.#get();
     const topics = topicSelectors.currentUnFavTopics(this.#get());
     const topicIds = topics.map((t) => t.id);
 
     await topicService.batchRemoveTopics(topicIds);
-    purgeUnreadTopics(topicIds);
     await refreshTopic();
+    // drop the deleted topics' message caches
+    const removed = new Set(topicIds);
+    void evictMessageCache((ctx) => !!ctx.topicId && removed.has(ctx.topicId));
 
     // Switch to default topic
     switchTopic(null);
+  };
+
+  batchMoveTopicsToAgent = async (topicIds: string[], targetAgentId: string): Promise<void> => {
+    if (topicIds.length === 0) return;
+
+    const { activeTopicId, switchTopic, refreshTopic } = this.#get();
+
+    await topicService.batchMoveTopics(topicIds, targetAgentId);
+
+    // Moved topics leave the current agent's list — drop them locally so the UI
+    // updates immediately, then refetch to reconcile with the server.
+    topicIds.forEach((id) =>
+      this.#get().internal_dispatchTopic({ type: 'deleteTopic', id }, 'batchMoveTopicsToAgent'),
+    );
+    await refreshTopic();
+    // the moved topics' message cache is keyed by the old agent — drop it so the
+    // next view under the target agent refetches instead of reading a stale key
+    const moved = new Set(topicIds);
+    void evictMessageCache((ctx) => !!ctx.topicId && moved.has(ctx.topicId));
+
+    // If the active topic was moved away, fall back to the default topic.
+    if (activeTopicId && topicIds.includes(activeTopicId)) switchTopic(null);
   };
 
   internal_updateTopicTitleInSummary = (id: string, title: string): void => {
@@ -936,16 +951,16 @@ export class ChatTopicActionImpl {
   refreshTopic = async (): Promise<void> => {
     const { activeAgentId, activeGroupId } = this.#get();
     // Use topicMapKey to generate the same key used in useFetchTopics
-    // Key format: [SWR_USE_FETCH_TOPIC, containerKey, { isInbox, pageSize }]
+    // Key format: topicKeys.list(containerKey, { isInbox, pageSize })
     const containerKey = topicMapKey({ agentId: activeAgentId, groupId: activeGroupId });
     const agentViewKey = activeAgentId ? topicMapKey({ agentId: activeAgentId }) : null;
     await mutate(
       (key) =>
         Array.isArray(key) &&
-        ((key[0] === SWR_USE_FETCH_TOPIC &&
+        ((key[0] === topicKeys.list.root &&
           typeof key[1] === 'string' &&
           key[1] === containerKey) ||
-          (key[0] === SWR_USE_FETCH_AGENT_TOPICS_VIEW &&
+          (key[0] === topicKeys.agentView.root &&
             agentViewKey !== null &&
             key[1] === agentViewKey)),
     );

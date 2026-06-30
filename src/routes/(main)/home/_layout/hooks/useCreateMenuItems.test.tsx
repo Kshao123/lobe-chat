@@ -68,7 +68,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,
 }));
 
@@ -171,6 +171,7 @@ describe('useCreateMenuItems', () => {
           },
         },
         avatar: 'claude-avatar',
+        provider: 'claude-code',
         systemRole: '',
         title: 'Claude Code',
       },
@@ -204,6 +205,7 @@ describe('useCreateMenuItems', () => {
           },
         },
         avatar: 'avatar',
+        provider: 'codex',
         systemRole: '',
         title: 'Codex',
       },

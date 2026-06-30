@@ -1,13 +1,13 @@
-import { Button, Flexbox, Tag } from '@lobehub/ui';
+import { Button, DropdownMenu, Flexbox, Tag } from '@lobehub/ui';
 import { confirmModal } from '@lobehub/ui/base-ui';
-import { App, Card, Dropdown } from 'antd';
+import { App, Card } from 'antd';
 import { createStaticStyles } from 'antd-style';
 import { ArrowRight, ChevronRight, Database, Ellipsis, Pencil, Play, Trash2 } from 'lucide-react';
 import { memo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
 
 import NeuralNetworkLoading from '@/components/NeuralNetworkLoading';
+import WorkspaceLink from '@/features/Workspace/WorkspaceLink';
 import { agentEvalService } from '@/services/agentEval';
 
 import { DATASET_PRESETS } from '../../../../config/datasetPresets';
@@ -189,26 +189,24 @@ const DatasetCard = memo<DatasetCardProps>(
           >
             {t('run.actions.run')}
           </Button>
-          <Dropdown
+          <DropdownMenu
             trigger={['click']}
-            menu={{
-              items: [
-                {
-                  icon: <Pencil size={14} />,
-                  key: 'edit',
-                  label: t('common.edit'),
-                  onClick: () => onEdit(dataset),
-                },
-                { type: 'divider' },
-                {
-                  danger: true,
-                  icon: <Trash2 size={14} />,
-                  key: 'delete',
-                  label: t('common.delete'),
-                  onClick: handleDelete,
-                },
-              ],
-            }}
+            items={[
+              {
+                icon: <Pencil size={14} />,
+                key: 'edit',
+                label: t('common.edit'),
+                onClick: () => onEdit(dataset),
+              },
+              { type: 'divider' as const },
+              {
+                danger: true,
+                icon: <Trash2 size={14} />,
+                key: 'delete',
+                label: t('common.delete'),
+                onClick: handleDelete,
+              },
+            ]}
           >
             <Button
               className={styles.dropdownButton}
@@ -217,7 +215,7 @@ const DatasetCard = memo<DatasetCardProps>(
               variant="text"
               onClick={(e) => e.stopPropagation()}
             />
-          </Dropdown>
+          </DropdownMenu>
           <ChevronRight
             size={16}
             style={{
@@ -251,14 +249,14 @@ const DatasetCard = memo<DatasetCardProps>(
               />
             )}
             <Flexbox horizontal align="center" className={styles.footer} justify="center">
-              <Link
+              <WorkspaceLink
                 className={styles.footerLink}
                 to={`/eval/bench/${benchmarkId}/datasets/${dataset.id}`}
               >
                 <Button icon={ArrowRight} iconPosition="end" size="small" variant="text">
                   {t('dataset.detail.viewDetail')}
                 </Button>
-              </Link>
+              </WorkspaceLink>
             </Flexbox>
           </div>
         )}

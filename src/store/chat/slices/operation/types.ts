@@ -14,6 +14,7 @@ export type OperationType =
   | 'createTopic' // Auto create topic
   | 'regenerate' // Regenerate message
   | 'continue' // Continue generation
+  | 'autoRetryPending' // Heterogeneous "overloaded" auto-retry waiting period (counting down to the next attempt). Keeps the turn in a loading/in-progress state between attempts; cancelled by Stop or the guide's cancel action.
 
   // === AI generation ===
   | 'execAgentRuntime' // Execute agent runtime (client-side, entire agent runtime execution)
@@ -232,6 +233,9 @@ export interface QueuedMessage {
   files?: string[];
   /** Snapshot of file previews (id, name, mime, url) for tray rendering and optimistic resume */
   filesPreview?: QueuedFile[];
+  /** Mirrors SendMessageParams.forceRuntime so a queued task-topic follow-up
+   *  keeps its gateway pin when the queue drains. */
+  forceRuntime?: 'client' | 'gateway' | 'hetero';
   id: string;
   interruptMode: 'soft' | 'hard';
   metadata?: MessageMetadata;
@@ -246,6 +250,7 @@ export interface MergedQueuedMessage {
   editorData?: Record<string, any>;
   files: string[];
   filesPreview: QueuedFile[];
+  forceRuntime?: 'client' | 'gateway' | 'hetero';
   metadata?: MessageMetadata;
 }
 
@@ -348,11 +353,16 @@ export const mergeQueuedMessages = (messages: QueuedMessage[]): MergedQueuedMess
     };
   }, undefined);
 
+  // If any queued message pins the runtime, propagate it — a "server topic"
+  // follow-up must stay on its rails even after merge.
+  const forceRuntime = sorted.find((m) => m.forceRuntime)?.forceRuntime;
+
   return {
     content: sorted.map((m) => m.content).join('\n\n'),
     editorData: mergeQueuedEditorData(sorted),
     files: sorted.flatMap((m) => m.files ?? []),
     filesPreview: sorted.flatMap((m) => m.filesPreview ?? []),
+    ...(forceRuntime ? { forceRuntime } : {}),
     metadata,
   };
 };
@@ -395,4 +405,7 @@ export const AI_RUNTIME_OPERATION_TYPES: OperationType[] = [
 export const INPUT_LOADING_OPERATION_TYPES: OperationType[] = [
   ...AI_RUNTIME_OPERATION_TYPES,
   'sendMessage',
+  // The auto-retry waiting period is part of the same in-progress turn — keep
+  // the input in loading state (and let Stop target it) across the countdown.
+  'autoRetryPending',
 ];
