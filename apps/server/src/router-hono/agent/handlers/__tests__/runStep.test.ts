@@ -184,11 +184,63 @@ describe('runStep handler', () => {
     expect(AiAgentService).toHaveBeenCalledWith(
       expect.anything(),
       'user-1',
-      expect.objectContaining({ workspaceId: 'ws-1' }),
+      expect.objectContaining({ includeShareVisitor: false, workspaceId: 'ws-1' }),
     );
     expect(mockExecuteStep).toHaveBeenCalledWith(
       expect.objectContaining({ operationId: 'op-1', stepIndex: 2 }),
     );
+  });
+
+  it('opts the AiAgentService into visitor rows when metadata carries streamOwnerUserId', async () => {
+    // A shared-agent visitor run: the op executes as the creator `userId`
+    // (`user-owner`) but the visitor (`visitor-1`) owns the stream. The step
+    // worker must set `includeShareVisitor: true` so the runtime's
+    // MessageModel / TopicModel can still read the visitor-scoped rows that
+    // `MessageModel` / `TopicModel` gate out by default.
+    mockGetOperationMetadata.mockResolvedValue({
+      streamOwnerUserId: 'visitor-1',
+      userId: 'user-owner',
+      workspaceId: 'ws-1',
+    });
+    mockExecuteStep.mockResolvedValue({
+      nextStepScheduled: false,
+      state: { cost: { total: 0 }, status: 'done', stepCount: 1 },
+      success: true,
+    });
+
+    const { ctx } = buildContext({ body: validBody });
+    await runStep(ctx);
+
+    expect(AiAgentService).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-owner',
+      expect.objectContaining({ includeShareVisitor: true, workspaceId: 'ws-1' }),
+    );
+  });
+
+  it('acks without retry when the runtime already re-queued the locked step', async () => {
+    mockGetOperationMetadata.mockResolvedValue({ userId: 'user-1' });
+    mockExecuteStep.mockResolvedValue({
+      locked: true,
+      lockRescheduled: true,
+      nextStepScheduled: true,
+      state: {},
+      success: true,
+    });
+
+    const { ctx, getCaptures } = buildContext({ body: validBody });
+    const res = await runStep(ctx);
+
+    // Must not be retryable: a re-delivery is already scheduled, and letting
+    // QStash retry on top of it is what dead-letters the step.
+    expect(res.status).toBe(200);
+    expect(getCaptures()[0].body).toMatchObject({
+      locked: true,
+      nextStepScheduled: true,
+      operationId: 'op-1',
+      stepIndex: 2,
+      success: true,
+    });
   });
 
   it('returns 429 with Retry-After header when the step is locked', async () => {

@@ -1,5 +1,5 @@
 export default {
-  'duration.TPS': 'TPS (Token per Second): Token output per second',
+  'duration.TPS': 'tok/s (Token per Second): Token output per second',
   'duration.TTFT': 'TTFT (Time To First Token): First token latency',
   'duration.completion': 'Output completion time',
   'duration.latency': 'Duration',
@@ -12,6 +12,7 @@ export default {
   'table.columns.spend': 'Credits',
   'table.columns.time': 'Time',
   'table.columns.totalTokens': 'Token Usage',
+  'table.columns.trigger.enums.agent_share': 'Agent Share',
   'table.columns.trigger.enums.agent_signal': 'Agent Signal',
   'table.columns.trigger.enums.api': 'API Call',
   'table.columns.trigger.enums.bot': 'Bot Message',

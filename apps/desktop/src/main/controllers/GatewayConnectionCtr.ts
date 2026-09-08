@@ -6,9 +6,12 @@ import path from 'node:path';
 import type { DeviceControlDeps } from '@lobechat/device-control';
 import type { AgentRunRequestMessage, GatewayMcpParams } from '@lobechat/device-gateway-client';
 import type { GatewayConnectionStatus } from '@lobechat/electron-client-ipc';
-import { resolveRemotePlatformCommand } from '@lobechat/heterogeneous-agents/scanHost';
+import type { RemotePlatformCommandRuntime } from '@lobechat/heterogeneous-agents/scanHost';
+import {
+  resolveRemotePlatformCommand,
+  resolveRemotePlatformRuntime,
+} from '@lobechat/heterogeneous-agents/scanHost';
 import { type ILocalSystemService, LocalSystemExecutionRuntime } from '@lobechat/tool-runtime';
-import { execa } from 'execa';
 
 import GatewayConnectionService from '@/services/gatewayConnectionSrv';
 import ImessageBridgeService from '@/services/imessageBridgeSrv';
@@ -17,13 +20,16 @@ import { setDesktopUserAgentHeader } from '@/utils/user-agent';
 
 import BrowserControlCtr from './BrowserControlCtr';
 import HeterogeneousAgentCtr from './HeterogeneousAgentCtr';
-import { ControllerModule, IpcMethod } from './index';
+import { ControllerModule, createProtocolHandler, IpcMethod } from './index';
 import LocalFileCtr from './LocalFileCtr';
 import McpCtr from './McpCtr';
 import RemoteServerConfigCtr from './RemoteServerConfigCtr';
 import ShellCommandCtr from './ShellCommandCtr';
 
 const logger = createLogger('controllers:GatewayConnectionCtr');
+const deviceProtocolHandler = createProtocolHandler('device');
+
+type AvailableRemotePlatformRuntime = Extract<RemotePlatformCommandRuntime, { available: true }>;
 
 // Mirror of `BrowserManifest.identifier` from `@lobechat/builtin-tool-browser`.
 // Hardcoded (not imported) so the desktop main process keeps zero builtin-tool
@@ -75,6 +81,7 @@ interface PlatformTaskEntry {
   agentId?: string;
   agentType: string;
   operationId: string;
+  parentOperationId?: string;
   pid: number;
   topicId: string;
   /**
@@ -126,6 +133,10 @@ export default class GatewayConnectionCtr extends ControllerModule {
   private readonly hermesSessionMap = new Map<string, string>();
 
   private localSystemRuntime: LocalSystemExecutionRuntime | null = null;
+  private resolveGatewayReady: (() => void) | undefined;
+  private readonly gatewayReady = new Promise<void>((resolve) => {
+    this.resolveGatewayReady = resolve;
+  });
 
   // ─── Service Accessor ───
 
@@ -199,6 +210,8 @@ export default class GatewayConnectionCtr extends ControllerModule {
       this.checkWorkspaceDeviceRegistered(workspaceId, deviceId),
     );
 
+    this.resolveGatewayReady?.();
+
     // Auto-connect if already logged in
     this.tryAutoConnect();
   }
@@ -229,6 +242,24 @@ export default class GatewayConnectionCtr extends ControllerModule {
     platform: string;
   }> {
     return this.service.getDeviceInfo();
+  }
+
+  /**
+   * Let the web app wake this desktop and restore its gateway connection from
+   * an offline device row. The device id guard matters when the user has more
+   * than one registered computer: opening the deep link on a different machine
+   * must not silently connect that machine instead.
+   */
+  @deviceProtocolHandler('reconnect')
+  async reconnectFromProtocol({ deviceId }: { deviceId?: string }): Promise<boolean> {
+    if (!deviceId) return false;
+
+    await this.gatewayReady;
+    if (!(await this.service.matchesDeviceId(deviceId))) return false;
+
+    this.app.storeManager.set('gatewayEnabled', true);
+    const result = await this.service.connect();
+    return result.success;
   }
 
   // ─── Auto Connect ───
@@ -284,10 +315,12 @@ export default class GatewayConnectionCtr extends ControllerModule {
         jwt,
         operationId: request.operationId,
         prompt: request.prompt,
+        resumeFallbackSystemContext: request.resumeFallbackSystemContext,
         resumeSessionId: request.resumeSessionId,
         serverUrl,
         systemContext: request.systemContext,
         topicId: request.topicId,
+        workspaceId: request.ingestWorkspaceId ?? request.workspaceId,
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -435,6 +468,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
             agentType: string;
             cwd?: string;
             operationId: string;
+            parentOperationId?: string;
             platformAgentId?: string;
             prompt: string;
             taskId: string;
@@ -513,20 +547,12 @@ export default class GatewayConnectionCtr extends ControllerModule {
     platform: string;
   }): Promise<{ available: boolean; reason?: string; version?: string }> {
     const { platform } = args;
-
-    const platformMap: Record<string, 'hermes' | 'openclaw'> = {
-      hermes: 'hermes',
-      openclaw: 'openclaw',
-    };
-
-    const platformType = platformMap[platform];
-    if (!platformType) {
-      return { available: false, reason: `Unknown platform: ${platform}` };
-    }
-
-    const status = await resolveRemotePlatformCommand(platformType);
+    const status = await resolveRemotePlatformCommand(platform);
     if (!status.available) {
-      return { available: false, reason: `${platform} is not installed on this device` };
+      return {
+        available: false,
+        reason: status.error ?? `${platform} is not installed on this device`,
+      };
     }
 
     return status.version ? { available: true, version: status.version } : { available: true };
@@ -538,24 +564,25 @@ export default class GatewayConnectionCtr extends ControllerModule {
     title?: string;
   }> {
     const { platform, agentId } = args;
+    if (platform !== 'openclaw' && platform !== 'hermes') return {};
+
+    const runtime = await resolveRemotePlatformRuntime(platform);
+    if (!runtime.available) return {};
 
     if (platform === 'openclaw') {
-      return this.getOpenClawProfile(agentId);
+      return this.getOpenClawProfile(runtime, agentId);
     }
 
-    if (platform === 'hermes') {
-      return this.getHermesProfile();
-    }
-
-    return {};
+    return this.getHermesProfile(runtime);
   }
 
-  private getHermesProfile(): { avatar?: string; description?: string; title?: string } {
+  private async getHermesProfile(
+    runtime: AvailableRemotePlatformRuntime,
+  ): Promise<{ avatar?: string; description?: string; title?: string }> {
     // Find the active profile (marked with ◆ in `hermes profile list`).
     let profileName: string | undefined;
     try {
-      const listOutput = execFileSync('hermes', ['profile', 'list'], {
-        encoding: 'utf8',
+      const { stdout: listOutput } = await runtime.execute(['profile', 'list'], {
         timeout: 5000,
       });
       profileName = listOutput.match(/◆(\S+)/)?.[1];
@@ -567,8 +594,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
     // Get the profile's filesystem path.
     let profilePath: string | undefined;
     try {
-      const showOutput = execFileSync('hermes', ['profile', 'show', profileName], {
-        encoding: 'utf8',
+      const { stdout: showOutput } = await runtime.execute(['profile', 'show', profileName], {
         timeout: 5000,
       });
       const raw = showOutput.match(/^Path:\s+(.+)/m)?.[1]?.trim();
@@ -608,17 +634,16 @@ export default class GatewayConnectionCtr extends ControllerModule {
     }
   }
 
-  private getOpenClawProfile(agentId?: string): {
-    avatar?: string;
-    description?: string;
-    title?: string;
-  } {
+  private async getOpenClawProfile(
+    runtime: AvailableRemotePlatformRuntime,
+    agentId?: string,
+  ): Promise<{ avatar?: string; description?: string; title?: string }> {
     let output: string;
     try {
-      output = execFileSync('openclaw', ['agents', 'list', '--json'], {
-        encoding: 'utf8',
+      const result = await runtime.execute(['agents', 'list', '--json'], {
         timeout: 5000,
       });
+      output = result.stdout;
     } catch {
       return {};
     }
@@ -676,6 +701,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
     agentType: string;
     cwd?: string;
     operationId: string;
+    parentOperationId?: string;
     platformAgentId?: string;
     prompt: string;
     taskId: string;
@@ -687,6 +713,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
       agentType,
       cwd,
       operationId,
+      parentOperationId,
       platformAgentId,
       prompt,
       taskId,
@@ -707,16 +734,17 @@ export default class GatewayConnectionCtr extends ControllerModule {
     const childEnv: NodeJS.ProcessEnv = {
       ...process.env,
       ...(accessToken && { LOBEHUB_JWT: accessToken }),
+      LOBEHUB_OPERATION_ID: operationId,
       ...(serverUrl && { LOBEHUB_SERVER: serverUrl }),
       ...(workspaceId && { LOBEHUB_WORKSPACE_ID: workspaceId }),
     };
+    const sessionKey = parentOperationId ? operationId : topicId;
 
     if (agentType === 'openclaw') {
-      const commandStatus = await resolveRemotePlatformCommand('openclaw');
-      if (!commandStatus.available || !commandStatus.path) {
+      const runtime = await resolveRemotePlatformRuntime('openclaw', childEnv);
+      if (!runtime.available) {
         throw new Error('OpenClaw executable not found');
       }
-      if (commandStatus.resolvedPathEnv) childEnv.PATH = commandStatus.resolvedPathEnv;
       const lhPath = this.resolveLhPath();
       const openclawAgent = platformAgentId?.trim() || process.env['OPENCLAW_AGENT_ID'] || 'main';
 
@@ -729,7 +757,11 @@ export default class GatewayConnectionCtr extends ControllerModule {
       // openclaw serialises session writes; a concurrent process holding the session
       // lock will cause the new one to exit with code 1.
       for (const [existingTaskId, entry] of this.platformTasks) {
-        if (entry.topicId === topicId && entry.agentType === 'openclaw') {
+        if (
+          entry.agentType === 'openclaw' &&
+          (existingTaskId === taskId ||
+            (!parentOperationId && !entry.parentOperationId && entry.topicId === topicId))
+        ) {
           this.killPlatformProcessTree(entry.pid, 'SIGTERM');
           this.platformTasks.delete(existingTaskId);
         }
@@ -740,26 +772,18 @@ export default class GatewayConnectionCtr extends ControllerModule {
         '--agent',
         openclawAgent,
         '--session-id',
-        topicId,
+        sessionKey,
         '--message',
         enrichedPrompt,
         '--local',
       ];
-      const child =
-        process.platform === 'win32'
-          ? execa(commandStatus.path, openclawArgs, {
-              cwd: workDir,
-              detached: true,
-              env: childEnv,
-              reject: false,
-              stdio: 'ignore',
-            })
-          : spawn(commandStatus.path, openclawArgs, {
-              cwd: workDir,
-              detached: true,
-              env: childEnv,
-              stdio: 'ignore',
-            });
+      const spawnPlan = await runtime.prepareSpawn(openclawArgs);
+      const child = spawn(spawnPlan.command, spawnPlan.args, {
+        cwd: workDir,
+        detached: true,
+        env: spawnPlan.env,
+        stdio: 'ignore',
+      });
 
       const pid = child.pid;
       if (pid === undefined) throw new Error('Failed to get PID for openclaw process');
@@ -769,6 +793,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
         agentId,
         agentType,
         operationId,
+        parentOperationId,
         pid,
         topicId,
         workspaceId,
@@ -785,17 +810,22 @@ export default class GatewayConnectionCtr extends ControllerModule {
           const text = signal
             ? `Task cancelled (signal: ${signal})`
             : `Task failed (exit code: ${code})`;
+          const terminalError = signal ? undefined : { message: text, type: 'HeteroProcessError' };
           void this.sendNotify({
             agentId,
             content: text,
+            operationId,
             role: 'assistant',
             topicId,
             workspaceId,
           }).finally(() =>
             this.sendNotify({
               agentId,
+              cancelled: !!signal,
               content: '',
               done: true,
+              error: terminalError,
+              operationId,
               role: 'assistant',
               topicId,
               workspaceId,
@@ -806,6 +836,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
             agentId,
             content: '',
             done: true,
+            operationId,
             role: 'assistant',
             topicId,
             workspaceId,
@@ -817,21 +848,24 @@ export default class GatewayConnectionCtr extends ControllerModule {
     }
 
     if (agentType === 'hermes') {
-      const commandStatus = await resolveRemotePlatformCommand('hermes');
-      if (!commandStatus.available || !commandStatus.path) {
+      const runtime = await resolveRemotePlatformRuntime('hermes', childEnv);
+      if (!runtime.available) {
         throw new Error('Hermes executable not found');
       }
-      if (commandStatus.resolvedPathEnv) childEnv.PATH = commandStatus.resolvedPathEnv;
       // Kill any existing hermes process for this topicId before spawning a new one.
       for (const [existingTaskId, entry] of this.platformTasks) {
-        if (entry.topicId === topicId && entry.agentType === 'hermes') {
+        if (
+          entry.agentType === 'hermes' &&
+          (existingTaskId === taskId ||
+            (!parentOperationId && !entry.parentOperationId && entry.topicId === topicId))
+        ) {
           this.killPlatformProcessTree(entry.pid, 'SIGTERM');
           this.platformTasks.delete(existingTaskId);
         }
       }
 
       // Resume the previous session for this topic if one exists.
-      const existingSessionId = this.hermesSessionMap.get(topicId);
+      const existingSessionId = this.hermesSessionMap.get(sessionKey);
       const hermesArgs: string[] = ['chat', '--query', prompt, '--quiet', '--accept-hooks'];
       if (existingSessionId) {
         hermesArgs.push('--resume', existingSessionId);
@@ -839,23 +873,13 @@ export default class GatewayConnectionCtr extends ControllerModule {
 
       // Hermes keeps stdout response-only in --quiet mode and prints the final
       // session_id to stderr so callers can resume the session on the next turn.
-      const child =
-        process.platform === 'win32'
-          ? execa(commandStatus.path, hermesArgs, {
-              cwd: workDir,
-              detached: true,
-              env: childEnv,
-              reject: false,
-              stderr: 'pipe',
-              stdin: 'ignore',
-              stdout: 'pipe',
-            })
-          : spawn(commandStatus.path, hermesArgs, {
-              cwd: workDir,
-              detached: true,
-              env: childEnv,
-              stdio: ['ignore', 'pipe', 'pipe'],
-            });
+      const spawnPlan = await runtime.prepareSpawn(hermesArgs);
+      const child = spawn(spawnPlan.command, spawnPlan.args, {
+        cwd: workDir,
+        detached: true,
+        env: spawnPlan.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
 
       const pid = child.pid;
       if (pid === undefined) throw new Error('Failed to get PID for hermes process');
@@ -865,6 +889,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
         agentId,
         agentType,
         operationId,
+        parentOperationId,
         pid,
         topicId,
         workspaceId,
@@ -889,17 +914,22 @@ export default class GatewayConnectionCtr extends ControllerModule {
           const text = signal
             ? `Task cancelled (signal: ${signal})`
             : `Task failed (exit code: ${code})`;
+          const terminalError = signal ? undefined : { message: text, type: 'HeteroProcessError' };
           void this.sendNotify({
             agentId,
             content: text,
+            operationId,
             role: 'assistant',
             topicId,
             workspaceId,
           }).finally(() =>
             this.sendNotify({
               agentId,
+              cancelled: !!signal,
               content: '',
               done: true,
+              error: terminalError,
+              operationId,
               role: 'assistant',
               topicId,
               workspaceId,
@@ -913,12 +943,13 @@ export default class GatewayConnectionCtr extends ControllerModule {
         const sessionId = parseHermesSessionId(stderr);
         const response = stdout.trim();
 
-        if (sessionId) this.hermesSessionMap.set(topicId, sessionId);
+        if (sessionId) this.hermesSessionMap.set(sessionKey, sessionId);
 
         if (response) {
           void this.sendNotify({
             agentId,
             content: response,
+            operationId,
             role: 'assistant',
             topicId,
             workspaceId,
@@ -927,6 +958,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
               agentId,
               content: '',
               done: true,
+              operationId,
               role: 'assistant',
               topicId,
               workspaceId,
@@ -937,6 +969,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
             agentId,
             content: '',
             done: true,
+            operationId,
             role: 'assistant',
             topicId,
             workspaceId,
@@ -1014,6 +1047,14 @@ export default class GatewayConnectionCtr extends ControllerModule {
 
   private async cancelHeteroTask(args: { signal?: string; taskId: string }): Promise<string> {
     const { signal = 'SIGINT', taskId } = args;
+    const localExec = await this.heterogeneousAgentCtr.cancelLhHeteroExec({
+      operationId: taskId,
+      signal: signal as NodeJS.Signals,
+    });
+    if (localExec) {
+      return JSON.stringify({ ...localExec, taskId });
+    }
+
     const entry = this.platformTasks.get(taskId);
 
     if (!entry) {
@@ -1033,8 +1074,11 @@ export default class GatewayConnectionCtr extends ControllerModule {
    */
   private async sendNotify(params: {
     agentId?: string;
+    cancelled?: boolean;
     content: string;
     done?: boolean;
+    error?: { message: string; type?: string };
+    operationId?: string;
     role: string;
     topicId: string;
     /**

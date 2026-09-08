@@ -1,5 +1,5 @@
 {
-  "duration.TPS": "TPS（每秒權杖數）：每秒輸出的權杖數量",
+  "duration.TPS": "tok/s（每秒權杖數）：每秒輸出的權杖數量",
   "duration.TTFT": "TTFT（首次權杖時間）：第一個權杖的延遲時間",
   "duration.completion": "輸出完成時間",
   "duration.latency": "耗時",
@@ -12,6 +12,7 @@
   "table.columns.spend": "使用點數",
   "table.columns.time": "時間",
   "table.columns.totalTokens": "權杖使用量",
+  "table.columns.trigger.enums.agent_share": "代理分享",
   "table.columns.trigger.enums.agent_signal": "代理信號",
   "table.columns.trigger.enums.api": "API 呼叫",
   "table.columns.trigger.enums.bot": "機器人訊息",

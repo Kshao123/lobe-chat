@@ -1,4 +1,5 @@
 export default {
+  'navigation.agentShare': 'Share',
   'navigation.agents': 'Agents',
   'navigation.channels': 'Channels',
   'navigation.chat': 'Chat',
@@ -7,6 +8,7 @@ export default {
   'navigation.discoverMcp': 'Discover MCP',
   'navigation.discoverModels': 'Discover Models',
   'navigation.discoverProviders': 'Discover Providers',
+  'navigation.apps': 'Apps',
   'navigation.group': 'Group',
   'navigation.groupChat': 'Group Chat',
   'navigation.groupProfile': 'Group Profile',
@@ -41,6 +43,8 @@ export default {
   'navigation.resourcePages': 'Pages',
   'navigation.resourceVideos': 'Videos',
   'navigation.settings': 'Settings',
+  'navigation.selfLearning': 'Self-evolving',
+  'navigation.sharedAgent': 'Shared Agent',
   'navigation.stats': 'Statistics',
   'navigation.task': 'Task',
   'navigation.tasks': 'Tasks',
@@ -140,6 +144,7 @@ export default {
   'updater.downloadingUpdate': 'Downloading update',
   'updater.downloadingUpdateDesc': 'The update is downloading, please wait...',
   'updater.installLater': 'Update on next launch',
+  'updater.ignore': 'Ignore',
   'updater.isLatestVersion': 'You are using the latest version',
   'updater.isLatestVersionDesc':
     'Great! The version {{version}} you are using is the latest available.',

@@ -6,18 +6,24 @@ import { AcceptanceService } from '../acceptanceService';
 const mocks = vi.hoisted(() => ({
   attachToAcceptance: vi.fn(),
   findById: vi.fn(),
+  findOwnTopicById: vi.fn(),
+  findPolicyById: vi.fn(),
+  findReportByRun: vi.fn(),
   findRunById: vi.fn(),
   ensureForSubject: vi.fn(),
   listByAcceptance: vi.fn(),
   setDecision: vi.fn(),
   taskResolve: vi.fn(),
   updateStatus: vi.fn(),
+  updatePolicyStatus: vi.fn(),
 }));
 
 vi.mock('@/database/models/acceptance', () => ({
   AcceptanceModel: vi.fn(() => ({
     ensureForSubject: mocks.ensureForSubject,
     findById: mocks.findById,
+    findPolicyById: mocks.findPolicyById,
+    updatePolicyStatus: mocks.updatePolicyStatus,
     updateStatus: mocks.updateStatus,
   })),
 }));
@@ -31,16 +37,16 @@ vi.mock('@/database/models/verifyRun', () => ({
 }));
 vi.mock('@/database/models/verifyCheckResult', () => ({ VerifyCheckResultModel: vi.fn() }));
 vi.mock('@/database/models/verifyEvidence', () => ({ VerifyEvidenceModel: vi.fn() }));
-vi.mock('@/database/models/verifyReport', () => ({ VerifyReportModel: vi.fn() }));
+vi.mock('@/database/models/verifyReport', () => ({
+  VerifyReportModel: vi.fn(() => ({ findByRun: mocks.findReportByRun })),
+}));
 vi.mock('@/database/models/task', () => ({
   TaskModel: vi.fn(() => ({ resolve: mocks.taskResolve })),
 }));
-vi.mock('@/database/models/topic', () => ({ TopicModel: vi.fn() }));
-vi.mock('@/database/models/document', () => ({ DocumentModel: vi.fn() }));
-vi.mock('../goalLoop', () => ({
-  maybeContinueGoalLoop: vi.fn().mockResolvedValue('spawn-failed'),
-  syncGoalToolState: vi.fn(),
+vi.mock('@/database/models/topic', () => ({
+  TopicModel: vi.fn(() => ({ findOwnTopicById: mocks.findOwnTopicById })),
 }));
+vi.mock('@/database/models/document', () => ({ DocumentModel: vi.fn() }));
 vi.mock('@/server/services/task', () => ({ TaskService: vi.fn() }));
 
 const service = () => new AcceptanceService({} as any, 'user-1');
@@ -55,6 +61,7 @@ const acceptance = (status: string) => ({
 describe('AcceptanceService decision gating', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.findPolicyById.mockImplementation((...args) => mocks.findById(...args));
     mocks.listByAcceptance.mockResolvedValue([{ id: 'run-1', roundIndex: 1 }]);
   });
 
@@ -69,8 +76,21 @@ describe('AcceptanceService decision gating', () => {
     expect(mocks.taskResolve).not.toHaveBeenCalled();
     expect(mocks.ensureForSubject).toHaveBeenCalledWith('standalone', 'external-delivery-1', {
       metadata: { title: 'External delivery' },
+      projectId: null,
       requirement: 'The external delivery works',
     });
+  });
+
+  it('treats an agent-share visitor topic as a non-existent subject', async () => {
+    // findOwnTopicById excludes visitor topics, so it resolves null here even
+    // though the id exists as a raw row — the creator must not be able to
+    // attach an acceptance to a visitor's conversation.
+    mocks.findOwnTopicById.mockResolvedValue(undefined);
+
+    await expect(
+      service().ensureForSubject('topic', 'tpc-visitor-1', { requirement: 'The topic works' }),
+    ).rejects.toThrow('topic "tpc-visitor-1" not found in the current workspace');
+    expect(mocks.ensureForSubject).not.toHaveBeenCalled();
   });
 
   it.each(['pending', 'planned', 'verifying', 'repairing'])(
@@ -119,6 +139,21 @@ describe('AcceptanceService decision gating', () => {
 
     await expect(service().attachRun('run-1', 'acc-1')).resolves.toBe(existing);
     expect(mocks.attachToAcceptance).not.toHaveBeenCalled();
+  });
+
+  it('attaches a workspace task run through internal policy scope', async () => {
+    mocks.findPolicyById.mockResolvedValue(acceptance('planned'));
+    mocks.findRunById.mockResolvedValue({ acceptanceId: null, id: 'run-2' });
+    mocks.attachToAcceptance.mockResolvedValue({
+      acceptanceId: 'acc-1',
+      id: 'run-2',
+      roundIndex: 2,
+    });
+
+    await expect(service().attachPolicyRun('run-2', 'acc-1')).resolves.toMatchObject({
+      acceptanceId: 'acc-1',
+    });
+    expect(mocks.attachToAcceptance).toHaveBeenCalledWith('run-2', 'acc-1', undefined);
   });
 
   it.each(['delivered', 'errored'])('accepts a settled (%s) delivery', async (status) => {

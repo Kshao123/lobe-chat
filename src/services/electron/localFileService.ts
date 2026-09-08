@@ -14,6 +14,7 @@ import {
   type GlobFilesResult,
   type GrepContentParams,
   type GrepContentResult,
+  type HashLocalFileParams,
   type KillCommandParams,
   type KillCommandResult,
   type ListLocalFileParams,
@@ -187,6 +188,10 @@ class LocalFileService {
     return ensureElectronIpc().localSystem.readFile(params);
   }
 
+  async hashLocalFile(params: HashLocalFileParams): Promise<string> {
+    return ensureElectronIpc().localSystem.hashLocalFile(params);
+  }
+
   async readLocalFiles(params: LocalReadFilesParams): Promise<LocalReadFileResult[]> {
     return ensureElectronIpc().localSystem.readFiles(params);
   }
@@ -242,6 +247,23 @@ class LocalFileService {
     }
 
     return fetchLocalFilePreview(result.url, params.accept, params.resourceScope);
+  }
+
+  async readLocalFileBytes(
+    params: LocalFilePreviewUrlParams,
+  ): Promise<{ bytes: Uint8Array; contentType: string } | undefined> {
+    const result = await ensureElectronIpc().localSystem.getLocalFilePreviewUrl(params);
+
+    if (!result.success || !result.url) return;
+
+    const response = await fetch(result.url);
+    if (!response.ok) return;
+
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      contentType:
+        normalizeContentType(response.headers.get('content-type')) || 'application/octet-stream',
+    };
   }
 
   async prepareSkillDirectory(

@@ -41,7 +41,12 @@ const currentTopicsWithoutCron = (s: ChatStoreState): ChatTopic[] | undefined =>
 };
 
 const currentActiveTopic = (s: ChatStoreState): ChatTopic | undefined => {
-  return currentTopics(s)?.find((topic) => topic.id === s.activeTopicId);
+  const inList = currentTopics(s)?.find((topic) => topic.id === s.activeTopicId);
+  if (inList) return inList;
+  // The active topic can be absent from the list bucket — archived (completed)
+  // topics are excluded by the sidebar fetch's `excludeStatuses`. Fall back to
+  // the by-id detail cache so consumers keep real data (title, metadata, …).
+  return s.activeTopicId ? s.topicDetailMap?.[s.activeTopicId] : undefined;
 };
 const searchTopics = (s: ChatStoreState): ChatTopic[] => s.searchTopics;
 
@@ -68,6 +73,8 @@ const getTopicById =
       const topic = topicData.items.find((item) => item.id === id);
       if (topic) return topic;
     }
+
+    return s.topicDetailMap?.[id];
   };
 
 /**
@@ -224,7 +231,33 @@ const displayTopicsForSidebar =
     // Favorites first, then sorted by the chosen timestamp, then page-sliced
     const favTopics = visibleTopics.filter((t) => t.favorite);
     const rest = visibleTopics.filter((t) => !t.favorite);
-    return [...sortTopics(favTopics, sortBy), ...sortTopics(rest, sortBy)].slice(0, pageSize);
+    const pagedTopics = [...sortTopics(favTopics, sortBy), ...sortTopics(rest, sortBy)].slice(
+      0,
+      pageSize,
+    );
+    const activeTopic = currentActiveTopic(s);
+
+    // A search result or direct URL can open a topic outside the sidebar's
+    // first page (or an archived topic excluded by the completed filter). Keep
+    // the configured page intact and add that one active row so selection never
+    // disappears merely because the route target was filtered out. An injected
+    // favorite stays in the favorite prefix instead of falling below regular rows.
+    if (
+      activeTopic &&
+      activeTopic.trigger !== 'cron' &&
+      !pagedTopics.some((topic) => topic.id === activeTopic.id)
+    ) {
+      if (activeTopic.favorite) {
+        const pagedFavorites = pagedTopics.filter((topic) => topic.favorite);
+        const pagedRest = pagedTopics.filter((topic) => !topic.favorite);
+
+        return [...sortTopics([...pagedFavorites, activeTopic], sortBy), ...pagedRest];
+      }
+
+      return [...pagedTopics, activeTopic];
+    }
+
+    return pagedTopics;
   };
 
 const getGroupFn = (

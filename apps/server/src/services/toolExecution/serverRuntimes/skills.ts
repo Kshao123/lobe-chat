@@ -182,6 +182,9 @@ class SkillServerRuntimeService implements SkillRuntimeService {
   ): Promise<{ command: string; error?: string }> => {
     const workspaceId =
       this.workspaceId ?? (isLhCommand(command) ? await this.resolveWorkspaceId() : undefined);
+    // No `shareVisitorBlocked` guard needed here: `lobe-skills` is absent from
+    // `AGENT_SHARE_ALLOWED_BUILTIN_IDENTIFIERS`, so this runtime is never
+    // constructed for an Agent Share visitor's run in the first place.
     const result = await preprocessLhCommand(command, this.userId, workspaceId);
 
     return { command: result.command, error: result.error };
@@ -449,11 +452,13 @@ class SkillServerRuntimeService implements SkillRuntimeService {
         success?: boolean;
       };
 
-      // `response.success` is the delivery envelope only: the device-side
-      // ComputerRuntime reports service failures (spawn error, shell lost,
-      // missing params) as `success: true` with `state.success: false` and no
-      // exitCode (`errorOutput`) — without this check they'd fall through to
-      // the still-running branch below and read as a successful run.
+      // `response.success` is the delivery envelope. Device-side service
+      // failures (spawn error, shell lost, missing params) now come back with
+      // `success: false`, but desktop builds predating that fix report them as
+      // `success: true` with `state.success: false` and no exitCode — and a
+      // device runs whatever version the user has installed. Keep testing both
+      // or those runs fall through to the still-running branch below and read
+      // as a successful run.
       if (!response.success || state.success === false) {
         return fail(
           state.stderr ||

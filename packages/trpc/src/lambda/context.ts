@@ -1,5 +1,5 @@
 import { type Context as OtContext } from '@lobechat/observability-otel/api';
-import { type ClientSecretPayload } from '@lobechat/types';
+import { type ClientSecretPayload, type SpendOrigin } from '@lobechat/types';
 import type { ClientMetadata } from '@lobechat/utils/server';
 import { parseClientMetadata } from '@lobechat/utils/server';
 import { parse } from 'cookie';
@@ -16,6 +16,8 @@ import { extractTraceContext } from '@/libs/observability/traceparent';
 import { assertOIDCUserActive, isOIDCUserInactiveError } from '@/libs/oidc-provider/access-control';
 import { validateOIDCJWT } from '@/libs/oidc-provider/jwt';
 import { isApiKeyExpired, validateApiKeyFormat } from '@/utils/apiKey';
+
+import { HETERO_OPERATION_JWT_PURPOSE } from '../utils/internalJwt';
 
 // Create context logger namespace
 const log = debug('lobe-trpc:lambda:context');
@@ -97,6 +99,17 @@ export interface AuthContext {
   oidcAuth?: OIDCAuth | null;
   oidcClientId?: string;
   resHeaders?: Headers;
+  /**
+   * Origin attribution for spend produced by this call, forwarded to the
+   * billing points the procedure reaches.
+   *
+   * SECURITY: never derived from request headers or any other client input —
+   * it decides who a charge is billed against, so a client could otherwise
+   * forge another user's attribution. Populated ONLY by a server-side
+   * `createCaller` (see the tool-execution server runtimes), where the values
+   * come from the already-authorized run context.
+   */
+  spendOrigin?: SpendOrigin;
   traceContext?: OtContext;
   userAgent?: string;
   userId?: string | null;
@@ -114,6 +127,8 @@ export const createContextInner = async (params?: {
   marketAccessToken?: string;
   oidcAuth?: OIDCAuth | null;
   oidcClientId?: string;
+  /** See {@link AuthContext.spendOrigin} — server-side callers only. */
+  spendOrigin?: SpendOrigin;
   traceContext?: OtContext;
   userAgent?: string;
   userId?: string | null;
@@ -130,6 +145,7 @@ export const createContextInner = async (params?: {
     oidcAuth: params?.oidcAuth,
     oidcClientId: params?.oidcClientId,
     resHeaders: responseHeaders,
+    spendOrigin: params?.spendOrigin,
     traceContext: params?.traceContext,
     userAgent: params?.userAgent,
     userId: params?.userId,
@@ -284,9 +300,21 @@ export const createLambdaContext = async (request: NextRequest): Promise<LambdaC
         // so banned/deleted accounts cannot keep using an already-issued token.
         const tokenInfo = await validateOIDCJWT(oidcAuthToken);
 
+        const operationClaims =
+          tokenInfo.tokenData.purpose === HETERO_OPERATION_JWT_PURPOSE
+            ? {
+                capabilities: tokenInfo.payload.capabilities,
+                iss: tokenInfo.payload.iss,
+                model: tokenInfo.payload.model,
+                operation_id: tokenInfo.payload.operation_id,
+                provider_id: tokenInfo.payload.provider_id,
+                workspace_id: tokenInfo.payload.workspace_id,
+              }
+            : undefined;
         oidcAuth = {
           payload: tokenInfo.tokenData,
           ...tokenInfo.tokenData, // Spread payload into oidcAuth
+          ...operationClaims,
           sub: tokenInfo.userId, // Use tokenData as payload
         };
         userId = tokenInfo.userId;

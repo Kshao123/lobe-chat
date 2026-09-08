@@ -30,7 +30,16 @@ type MarketAgentModel =
 type AgentMetaUpdate = Partial<
   Pick<
     AgentItem,
-    'avatar' | 'backgroundColor' | 'description' | 'marketIdentifier' | 'name' | 'tags' | 'title'
+    | 'avatar'
+    | 'backgroundColor'
+    | 'description'
+    | 'marketIdentifier'
+    | 'metadata'
+    | 'name'
+    | 'profile'
+    | 'societyId'
+    | 'tags'
+    | 'title'
   >
 >;
 
@@ -255,12 +264,20 @@ class AgentService {
   };
 
   /**
-   * Resolve a url slug to its agent id. Returns `null` for an unknown slug and
-   * for one the caller can't see — the two are deliberately indistinguishable.
+   * Resolve what a `/agent/:slugOrId` param points at: one of the caller's own
+   * agents (by id or slug), an agent share, or nothing. See the
+   * `resolveAgentRoute` procedure for the resolution order and its privacy
+   * properties.
    */
-  resolveAgentIdBySlug = async (slug: string): Promise<string | null> => {
-    const { agentId } = await lambdaClient.agent.resolveAgentIdBySlug.query({ slug });
-    return agentId;
+  resolveAgentRoute = async (slugOrId: string) => {
+    // An anonymous visitor on a share URL gets UNAUTHORIZED here (the
+    // resolver is auth-gated); opt out of the global 401 handler so it does
+    // not hard-redirect them to /signin before the share surface's own
+    // sign-in prompt can render (mirrors `agentShareService.getSharedAgent`).
+    return lambdaClient.agent.resolveAgentRoute.query(
+      { slugOrId },
+      { context: { showNotification: false } },
+    );
   };
 
   /** Rename an agent's url slug (validated server-side; see `updateAgentSlug`). */
@@ -368,11 +385,29 @@ class AgentService {
     targetWorkspaceId: string | null,
     targetVisibility?: 'private' | 'public',
   ): Promise<{ agentId: string; slug: string | null; transferJobId: string | null }> => {
-    return lambdaClient.agent.transferAgent.mutate({
+    const result = await lambdaClient.agent.transferAgent.mutate({
       agentId,
       targetVisibility,
       targetWorkspaceId,
     });
+    // Without `targetMemberId` the endpoint always takes the scope-move path.
+    return result as { agentId: string; slug: string | null; transferJobId: string | null };
+  };
+
+  /**
+   * Hand ownership to another member of the current workspace. Creates a
+   * pending transfer request the recipient must accept — nothing moves yet.
+   */
+  requestAgentTransferToMember = async (params: {
+    agentId: string;
+    targetMemberId: string;
+  }): Promise<{ requestId: string; status: 'pending' }> => {
+    const result = await lambdaClient.agent.transferAgent.mutate({
+      agentId: params.agentId,
+      targetMemberId: params.targetMemberId,
+      targetWorkspaceId: null,
+    });
+    return result as { requestId: string; status: 'pending' };
   };
 
   /**

@@ -37,6 +37,21 @@ export const TOOL_MAX_RETRIES = 2;
 
 export const GEN_AI_FUNCTION_TOOL_TYPE: ToolType = 'function';
 
+/**
+ * Models occasionally select a member by its displayed name even though group
+ * management actions require its persisted agent id. Accept an exact display
+ * name only when it resolves unambiguously within this operation's snapshot.
+ */
+export const resolveGroupMemberId = (
+  requestedAgentId: string,
+  agentMap: Record<string, { name: string }> | undefined,
+): string => {
+  if (!agentMap || requestedAgentId in agentMap) return requestedAgentId;
+
+  const matches = Object.entries(agentMap).filter(([, member]) => member.name === requestedAgentId);
+  return matches.length === 1 ? matches[0][0] : requestedAgentId;
+};
+
 export const archiveRuntimeToolResult = async (
   result: ToolExecutionResultResponse,
   {
@@ -197,6 +212,11 @@ export const buildServerVirtualSubAgentRunner = (
   chatToolPayload: ChatToolPayload,
   parentMessageId: string,
 ): ServerSubAgentRunner | undefined => {
+  // Share-visitor runs never get a sub-agent runner: the child run spawned
+  // here does not thread the parent's shareGate, so it would execute with the
+  // creator's full unrestricted tool surface. Same fail-closed stance as
+  // `ServerSubAgentTransport` and the `isShareBlockedBuiltinDispatch` gate.
+  if (ctx.agentShareVisitor) return undefined;
   const execVirtualSubAgent = ctx.execVirtualSubAgent;
   if (!execVirtualSubAgent) return undefined;
 
@@ -273,7 +293,9 @@ export const buildServerVirtualSubAgentRunner = (
       //    an inline tool error instead.
       if (!result?.success) {
         try {
-          await ctx.messageModel.deleteMessage(placeholder.id);
+          // Runtime placeholder cleanup — also valid inside an agent-share
+          // visitor topic, hence the explicit opt-in.
+          await ctx.messageModel.deleteMessage(placeholder.id, { includeShareVisitor: true });
         } catch (error) {
           log(
             'buildServerVirtualSubAgentRunner: failed to clean up placeholder %s: %O',
@@ -323,6 +345,9 @@ export const buildServerAgentMemberRunner = (
   chatToolPayload: ChatToolPayload,
   parentMessageId: string,
 ): ServerAgentMemberRunner | undefined => {
+  // Same share-visitor fail-close as `buildServerVirtualSubAgentRunner`:
+  // member runs would not inherit the parent's shareGate.
+  if (ctx.agentShareVisitor) return undefined;
   const execGroupMember = ctx.execGroupMember;
   if (!execGroupMember) return undefined;
 
@@ -333,7 +358,14 @@ export const buildServerAgentMemberRunner = (
 
   return {
     run: async ({ members, mode, onComplete, disableTools, timeout }) => {
-      const expectedMembers = members.length;
+      const agentMap = (
+        state.metadata?.agentGroup as { agentMap?: Record<string, { name: string }> } | undefined
+      )?.agentMap;
+      const resolvedMembers = members.map((member) => ({
+        ...member,
+        agentId: resolveGroupMemberId(member.agentId, agentMap),
+      }));
+      const expectedMembers = resolvedMembers.length;
       if (expectedMembers === 0) return { started: false, startedCount: 0 };
 
       // In-group multi-member actions (broadcast) render as an AgentCouncil: each
@@ -392,7 +424,7 @@ export const buildServerAgentMemberRunner = (
       // 3. Fork members.
       let startedCount = 0;
       await Promise.all(
-        members.map(async (member, i) => {
+        resolvedMembers.map(async (member, i) => {
           const anchorMessageId = anchorIds[i];
           try {
             const result = await execGroupMember({
@@ -445,7 +477,8 @@ export const buildServerAgentMemberRunner = (
       if (startedCount === 0) {
         for (const id of new Set([...anchorIds, groupTool.id])) {
           try {
-            await ctx.messageModel.deleteMessage(id);
+            // Runtime placeholder cleanup — see the sub-agent runner above.
+            await ctx.messageModel.deleteMessage(id, { includeShareVisitor: true });
           } catch (error) {
             log('buildServerAgentMemberRunner: cleanup failed for %s: %O', id, error);
           }

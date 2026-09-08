@@ -1,5 +1,5 @@
 {
-  "duration.TPS": "TPS (Token pro Sekunde): Token-Ausgabe pro Sekunde",
+  "duration.TPS": "tok/s (Token pro Sekunde): Token-Ausgabe pro Sekunde",
   "duration.TTFT": "TTFT (Time To First Token): Latenz bis zum ersten Token",
   "duration.completion": "Ausgabeabschlusszeit",
   "duration.latency": "Dauer",
@@ -12,6 +12,7 @@
   "table.columns.spend": "Credits",
   "table.columns.time": "Zeit",
   "table.columns.totalTokens": "Token-Nutzung",
+  "table.columns.trigger.enums.agent_share": "Agentenanteil",
   "table.columns.trigger.enums.agent_signal": "Agentensignal",
   "table.columns.trigger.enums.api": "API-Aufruf",
   "table.columns.trigger.enums.bot": "Bot-Nachricht",

@@ -14,7 +14,13 @@ export { BotPlatformContextInjector } from './BotPlatformContextInjector';
 export { ContextSelectionsInjector } from './ContextSelectionsInjector';
 export { DiscordContextProvider } from './DiscordContextProvider';
 export { EvalContextSystemInjector } from './EvalContextSystemInjector';
+export {
+  buildExpertiseContextSnapshot,
+  ExpertiseContextInjector,
+} from './ExpertiseContextInjector';
 export { ForceFinishSummaryInjector } from './ForceFinishSummaryInjector';
+export type { GoalContextSyntheticInjectorConfig } from './GoalContextSyntheticInjector';
+export { GoalContextSyntheticInjector } from './GoalContextSyntheticInjector';
 export { GroupAgentBuilderContextInjector } from './GroupAgentBuilderContextInjector';
 export { GroupContextInjector } from './GroupContextInjector';
 export { HistorySummaryProvider } from './HistorySummary';
@@ -80,6 +86,10 @@ export type {
 export type { ContextSelectionsInjectorConfig } from './ContextSelectionsInjector';
 export type { DiscordContext, DiscordContextProviderConfig } from './DiscordContextProvider';
 export type { EvalContext, EvalContextSystemInjectorConfig } from './EvalContextSystemInjector';
+export type {
+  ExpertiseContextInjectorConfig,
+  ExpertiseContextSource,
+} from './ExpertiseContextInjector';
 export type { ForceFinishSummaryInjectorConfig } from './ForceFinishSummaryInjector';
 export type {
   GroupAgentBuilderContext,

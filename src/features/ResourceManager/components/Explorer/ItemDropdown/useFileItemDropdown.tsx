@@ -1,6 +1,6 @@
 import { CUSTOM_FOLDER_FILE_TYPE, DERIVED_DOCUMENT_SOURCE_TYPE } from '@lobechat/const';
 import type { SFSymbol } from '@lobechat/electron-client-ipc';
-import { copyToClipboard, Icon, Tooltip } from '@lobehub/ui';
+import { copyToClipboard, Icon } from '@lobehub/ui';
 import { confirmModal, toast } from '@lobehub/ui/base-ui';
 import { type ItemType } from 'antd/es/menu/interface';
 import {
@@ -19,12 +19,12 @@ import { useTranslation } from 'react-i18next';
 import { shallow } from 'zustand/shallow';
 
 import RepoIcon from '@/components/LibIcon';
+import { useSendToMessengerMenuItem } from '@/features/Messenger/PushResourceModal/useSendToMessengerMenuItem';
 import { useKnowledgeBaseListContext } from '@/features/ResourceManager/components/KnowledgeBaseListProvider';
 import { PAGE_FILE_TYPE } from '@/features/ResourceManager/constants';
 import VisibilityConfirmContent from '@/features/VisibilityConfirmContent';
 import { useAppOrigin } from '@/hooks/useAppOrigin';
 import { usePermission } from '@/hooks/usePermission';
-import { useResourceManageable } from '@/hooks/useResourceManageable';
 import { documentService } from '@/services/document';
 import { useFileStore } from '@/store/file';
 import { useKnowledgeBaseStore } from '@/store/library';
@@ -32,17 +32,25 @@ import { useTreeStore } from '@/store/tree';
 import { useUserStore } from '@/store/user';
 import { userProfileSelectors } from '@/store/user/selectors';
 import { downloadFile } from '@/utils/client/downloadFile';
-import { isForbiddenError } from '@/utils/forbiddenError';
 
 import { openMoveToFolderModal } from '../MoveToFolderModal';
 
 interface UseFileItemDropdownParams {
   enabled?: boolean;
+  /**
+   * The underlying `files.id` when the row is a file. The unified resource
+   * list addresses a file that backs a derived page by the PAGE id
+   * (`COALESCE(d.id, f.id)` in KnowledgeRepo), so `id` alone cannot be used
+   * for file-table lookups such as the messenger push.
+   */
+  fileId?: string | null;
   filename: string;
   fileType: string;
   id: string;
   libraryId?: string;
   onRenameStart?: () => void;
+  /** Byte size when available — powers the push modal's oversize pre-warning. */
+  size?: number;
   sourceType?: string;
   url: string;
   userId?: string | null;
@@ -59,11 +67,13 @@ interface UseFileItemDropdownReturn {
  * Shared with folder tree and explorer
  */
 export const useFileItemDropdown = ({
+  fileId,
   id,
   libraryId,
   url,
   filename,
   fileType,
+  size,
   sourceType,
   onRenameStart,
   userId,
@@ -74,9 +84,6 @@ export const useFileItemDropdown = ({
   const appOrigin = useAppOrigin();
   const { allowed: canEditResources } = usePermission('edit_own_content');
   const currentUserId = useUserStore(userProfileSelectors.userId);
-  // Row-level ownership: only the creator or a workspace owner may rename or
-  // delete a shared resource — mirrors the server-side enforcement.
-  const canManage = useResourceManageable(userId);
 
   const {
     deleteResource,
@@ -117,6 +124,15 @@ export const useFileItemDropdown = ({
     !isPDF &&
     !isOfficeFile &&
     (sourceType === DERIVED_DOCUMENT_SOURCE_TYPE || fileType === PAGE_FILE_TYPE);
+
+  // Pages/documents have no storage URL to attach, so only real files get the
+  // "Send to chat platform" entry. The server resolves the attachment by
+  // `files.id`, but a file that backs a derived page is listed under the PAGE
+  // id — always prefer the row's underlying `fileId` when it carries one.
+  const sendToMessengerItem = useSendToMessengerMenuItem({
+    enabled: !isFolder && !isPage && !!url,
+    file: { fileType, id: fileId ?? id, name: filename, size },
+  });
 
   const menuItems = useCallback(() => {
     // Filter out current knowledge base and constrain by visibility scope:
@@ -312,43 +328,6 @@ export const useFileItemDropdown = ({
             },
           },
         canEditResources && isOwnPublicFile && { type: 'divider' },
-        ...libraryRelatedActions,
-        hasKnowledgeBaseActions && {
-          type: 'divider',
-        },
-        canEditResources &&
-          isInLibrary && {
-            icon: <Icon icon={FolderInputIcon} />,
-            key: 'moveToFolder',
-            label: t('FileManager.actions.moveToFolder'),
-            onClick: async ({ domEvent }) => {
-              domEvent.stopPropagation();
-
-              openMoveToFolderModal({
-                fileId: id,
-                knowledgeBaseId: libraryId,
-              });
-            },
-          },
-        canEditResources &&
-          isFolder && {
-            disabled: !canManage,
-            icon: <Icon icon={PencilIcon} />,
-            key: 'rename',
-            label: canManage ? (
-              t('FileManager.actions.rename')
-            ) : (
-              <Tooltip title={t('manageOnlyCreator', { ns: 'common' })}>
-                <span>{t('FileManager.actions.rename')}</span>
-              </Tooltip>
-            ),
-            onClick: async ({ domEvent }) => {
-              domEvent.stopPropagation();
-              if (!canManage) return;
-              onRenameStart?.();
-            },
-            sfSymbol: 'pencil',
-          },
         {
           icon: <Icon icon={LinkIcon} />,
           key: 'copyUrl',
@@ -413,49 +392,72 @@ export const useFileItemDropdown = ({
             downloadingToast.close();
           },
         },
+        sendToMessengerItem,
+        (hasKnowledgeBaseActions || (canEditResources && (isInLibrary || isFolder))) && {
+          type: 'divider',
+        },
+        ...libraryRelatedActions,
+        canEditResources &&
+          isInLibrary && {
+            icon: <Icon icon={FolderInputIcon} />,
+            key: 'moveToFolder',
+            label: t('FileManager.actions.moveToFolder'),
+            onClick: async ({ domEvent }) => {
+              domEvent.stopPropagation();
+
+              openMoveToFolderModal({
+                fileId: id,
+                knowledgeBaseId: libraryId,
+              });
+            },
+          },
+        canEditResources &&
+          isFolder && {
+            icon: <Icon icon={PencilIcon} />,
+            key: 'rename',
+            label: t('FileManager.actions.rename'),
+            onClick: async ({ domEvent }) => {
+              domEvent.stopPropagation();
+              onRenameStart?.();
+            },
+            sfSymbol: 'pencil',
+          },
         canEditResources && {
           type: 'divider',
         },
         canEditResources && {
           danger: true,
-          disabled: !canManage,
           icon: <Icon icon={Trash} />,
           key: 'delete',
-          label: canManage ? (
-            t('delete', { ns: 'common' })
-          ) : (
-            <Tooltip title={t('manageOnlyCreator', { ns: 'common' })}>
-              <span>{t('delete', { ns: 'common' })}</span>
-            </Tooltip>
-          ),
+          label: t('delete', { ns: 'common' }),
           onClick: async ({ domEvent }) => {
             domEvent.stopPropagation();
-            if (!canManage) return;
             confirmModal({
               content: isFolder
                 ? t('FileManager.actions.confirmDeleteFolder')
                 : t('FileManager.actions.confirmDelete'),
               okButtonProps: { danger: true },
               title: t('delete', { ns: 'common' }),
-              onOk: async () => {
-                try {
-                  // Use optimistic delete - instant UI update, sync in background
-                  await deleteResource(id);
+              onOk: () => {
+                // The store removes the row optimistically. Do not hold the
+                // confirmation dialog open while the network mutation and
+                // reconciliation finish; failures roll back and surface a toast.
+                void (async () => {
+                  try {
+                    await deleteResource(id);
 
-                  // Revalidate tree for the parent folder
-                  const { queryParams } = useFileStore.getState();
-                  const parentId = queryParams?.parentId ?? '';
-                  void useTreeStore.getState().revalidate(parentId);
-                  await refreshFileList({ revalidateResources: false });
+                    // Revalidate tree for the parent folder
+                    const { queryParams } = useFileStore.getState();
+                    const parentId = queryParams?.parentId ?? '';
+                    void useTreeStore.getState().revalidate(parentId);
+                    await refreshFileList({ revalidateResources: false });
 
-                  toast.success(t('FileManager.actions.deleteSuccess'));
-                } catch (error) {
-                  toast.error(
-                    isForbiddenError(error)
-                      ? t('manageOnlyCreator', { ns: 'common' })
-                      : t('operationFailed', { ns: 'common' }),
-                  );
-                }
+                    toast.success(t('FileManager.actions.deleteSuccess'));
+                  } catch (error) {
+                    console.error('Failed to delete resource:', error);
+                    toast.error(t('operationFailed', { ns: 'common' }));
+                  }
+                })();
               },
             });
           },
@@ -467,7 +469,6 @@ export const useFileItemDropdown = ({
     addFilesToKnowledgeBase,
     appOrigin,
     canEditResources,
-    canManage,
     currentUserId,
     deleteResource,
     filename,
@@ -483,6 +484,7 @@ export const useFileItemDropdown = ({
     setFileVisibility,
     refreshFileList,
     removeFilesFromKnowledgeBase,
+    sendToMessengerItem,
     sourceType,
     t,
     url,

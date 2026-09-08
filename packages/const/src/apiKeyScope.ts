@@ -179,8 +179,17 @@ export const TRPC_NAMESPACE_API_KEY_RULES: Record<string, TrpcNamespaceScopeRule
   agentLabel: rw('agent:read', 'agent:write'),
   agentNotify: rw('agent:read', 'agent:write'),
   agentQuota: rw('agent:read', null),
+  // share management toggles a public entry point and monthly spend caps
+  // charged to the owner; restricted API keys must not flip it (full-access
+  // keys still can)
+  agentShare: 'blocked',
   agentSignal: rw('agent:read', 'agent:write'),
   agentSkills: rw('agent:read', 'agent:write'),
+  // a trace snapshot is the whole inside of a run — system role, injected user
+  // memory, tool results — and `getSnapshotUrl` hands back a presigned URL that
+  // needs no further auth, so a restricted key holding one would read past its
+  // own scope. Same call as `llmGenerationTracing`.
+  agentTrace: 'blocked',
   aiAgent: rw('agent:read', 'agent:write'),
   aiChat: { any: 'model:invoke' },
   aiModel: rw('model:read', 'model:write'),
@@ -188,6 +197,7 @@ export const TRPC_NAMESPACE_API_KEY_RULES: Record<string, TrpcNamespaceScopeRule
   // keys must not mint or manage keys
   apiKey: 'blocked',
   asr: { any: 'model:invoke' },
+  artifactShare: rw('chat:read', null),
   // decrypts stored bot/messenger credentials and calls external channel APIs
   botMessage: 'blocked',
   brief: rw('chat:read', 'chat:write'),
@@ -200,6 +210,8 @@ export const TRPC_NAMESPACE_API_KEY_RULES: Record<string, TrpcNamespaceScopeRule
   connector: 'blocked',
   device: 'blocked',
   document: rw('knowledge:read', 'knowledge:write'),
+  documentComment: rw('knowledge:read', 'knowledge:write'),
+  documentLike: rw('knowledge:read', 'knowledge:write'),
   expertise: rw('agent:read', 'agent:write'),
   // whole-account backup dump (settings incl. market tokens, providers, agents)
   exporter: 'blocked',
@@ -208,6 +220,7 @@ export const TRPC_NAMESPACE_API_KEY_RULES: Record<string, TrpcNamespaceScopeRule
   generation: { any: 'model:invoke' },
   generationBatch: { any: 'model:invoke' },
   generationTopic: { any: 'model:invoke' },
+  goal: rw('agent:read', 'agent:write'),
   group: rw('agent:read', 'agent:write'),
   healthcheck: 'open',
   home: rw('chat:read', 'chat:write'),
@@ -225,6 +238,9 @@ export const TRPC_NAMESPACE_API_KEY_RULES: Record<string, TrpcNamespaceScopeRule
   message: rw('chat:read', 'chat:write'),
   // IM channel management carries channel credentials
   messenger: 'blocked',
+  // numeric telemetry attached to a goal / agent / task / project — same
+  // domain as the subjects that own it
+  metric: rw('agent:read', 'agent:write'),
   notebook: rw('knowledge:read', 'knowledge:write'),
   notification: rw('user:read', 'user:write'),
   oauthApp: 'blocked',
@@ -237,10 +253,17 @@ export const TRPC_NAMESPACE_API_KEY_RULES: Record<string, TrpcNamespaceScopeRule
   recent: rw('chat:read', null),
   referral: 'blocked',
   resourcePermission: 'blocked',
+  // Member-to-member ownership handover: accepting/declining is an interactive
+  // human decision, not something a restricted key should automate.
+  resourceTransferRequest: 'blocked',
   search: rw('chat:read', null),
   session: rw('chat:read', 'chat:write'),
   sessionGroup: rw('chat:read', 'chat:write'),
   share: rw('chat:read', 'chat:write'),
+  // visitor-side chat endpoints execute under the CREATOR's identity/budget via
+  // share authorization, not the caller's key scope; never reachable with a
+  // restricted key
+  shareChat: 'blocked',
   spend: 'blocked',
   storageOverage: 'blocked',
   subscription: 'blocked',
