@@ -37,6 +37,13 @@ interface UnsavedChangesGuardOptions {
 
 export interface EditorCanvasProps {
   /**
+   * Allow block plugins to render outside the editor's normal text column.
+   * Keep disabled for compact editor surfaces; PageEditor enables it for wide
+   * table scroll areas and their resize controls.
+   */
+  allowContentBleed?: boolean;
+
+  /**
    * Whether to enable auto-save in DocumentStore. Defaults to true.
    * Only applies when documentId is provided.
    */
@@ -89,6 +96,13 @@ export interface EditorCanvasProps {
   };
 
   /**
+   * Convert `$...$` input and Markdown inline-math tokens into formula nodes.
+   * Defaults to true. PageEditor disables this because business documents use
+   * dollar signs far more often than inline formulas.
+   */
+  enableInlineMath?: boolean;
+
+  /**
    * Entity ID (e.g., agentId, groupId) to track which entity is being edited.
    * When entityId changes, editor content will be reloaded.
    * When entityId stays the same, editorData changes won't trigger reload.
@@ -138,6 +152,15 @@ export interface EditorCanvasProps {
    * Use this when you need complete control over plugins.
    */
   plugins?: EditorPlugins;
+
+  /**
+   * Selection actions that stay available while the editor is NOT editable
+   * (locked or view-only page). They render in a floating toolbar of their
+   * own with no formatting controls, so a reader can still act on a selection
+   * — comment on it, ask about it — without being offered edits that would
+   * never save. Ignored while editable; use `toolbarExtraItems` there.
+   */
+  readonlySelectionItems?: ChatInputActionsProps['items'];
 
   /**
    * Slash menu items

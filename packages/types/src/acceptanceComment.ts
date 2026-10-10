@@ -33,6 +33,35 @@ export interface AcceptanceCommentAttachmentRef {
   fileId: string;
 }
 
+/**
+ * Where a remark was written when it did not come from the acceptance viewer:
+ * a reviewer pointing at a page of the delivered product through the embedded
+ * review toolbar. It is the reproduction recipe the repair agent reads — the
+ * page, the element, what the page itself reported, and any product-specific
+ * facts (e.g. which sandbox data scenario was loaded).
+ */
+export interface AcceptanceCommentSource {
+  /** Build / commit the page was served from, when the product exposes one. */
+  commit?: string;
+  /** Recent front-end errors on that page, newest last. */
+  consoleErrors?: string[];
+  /** Visible text of the element, trimmed — a way to find it when the selector drifts. */
+  elementText?: string;
+  /** Product-defined facts, e.g. `{ scenario: 'training-mixed', seed: 7 }`. */
+  extra?: Record<string, boolean | number | string>;
+  kind: 'product-page';
+  /** Element box in viewport pixels at the time of the remark. */
+  rect?: { height: number; width: number; x: number; y: number };
+  /** A CSS selector for the element the reviewer pointed at. */
+  selector?: string;
+  /** Document title of the page. */
+  title?: string;
+  /** Full page URL. */
+  url: string;
+  userAgent?: string;
+  viewport?: { height: number; width: number };
+}
+
 /** One emoji on one comment, already tallied for display. */
 export interface AcceptanceCommentReaction {
   /** Display names behind the count, for the "who reacted" tooltip. */
@@ -84,6 +113,11 @@ export interface AcceptanceCommentItem extends AcceptanceCommentAnchor {
   /** The agent that signed it, when an agent wrote the row. */
   authorAgentId: string | null;
   authorUserId: string | null;
+  /**
+   * Whether THIS reader may remove the row: its author, or someone who may
+   * moderate the acceptance. Never a stand-in for "I wrote this" — compare
+   * `authorUserId` for that.
+   */
   canDelete: boolean;
   clientId: string;
   content: string;
@@ -121,7 +155,9 @@ export interface AcceptanceApprovalSummary {
 }
 
 export interface AcceptanceCommentList {
-  /** May the caller write comments / approvals here? */
+  /** May the caller approve a round — speak for the delivery rather than about it? */
+  canApprove: boolean;
+  /** May the caller write comments, annotations and reactions here? */
   canComment: boolean;
   items: AcceptanceCommentItem[];
 }

@@ -301,6 +301,32 @@ describe('AiAgentService.execAgent - hetero early-exit file attachments', () => 
   const findUserMessageCreate = () =>
     mockMessageCreate.mock.calls.find((call) => call[0].role === 'user');
 
+  it('prepares dependent records before dispatching the heterogeneous process', async () => {
+    let release!: () => void;
+    const prepared = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const onOperationCreated = vi.fn<(operationId: string) => Promise<void>>(async () => prepared);
+    const execution = service.execAgent({ agentId: 'agent-1', prompt: 'Fix', onOperationCreated });
+    try {
+      await vi.waitFor(() => expect(onOperationCreated).toHaveBeenCalledTimes(1));
+      expect(recordStartSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ operationId: onOperationCreated.mock.calls[0][0] }),
+      );
+      expect(mockDispatchAgentRun).not.toHaveBeenCalled();
+      expect(mockSpawnHeteroSandbox).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+    const result = await execution;
+    expect(result.autoStarted).toBe(true);
+    expect(
+      mockDispatchAgentRun.mock.calls.length +
+        mockSpawnHeteroSandbox.mock.calls.length +
+        mockExecuteToolCall.mock.calls.length,
+    ).toBeGreaterThan(0);
+  });
+
   it('does not dispatch a heterogeneous run when its durable operation row fails', async () => {
     recordStartSpy.mockResolvedValueOnce(false);
 
@@ -598,6 +624,35 @@ describe('AiAgentService.execAgent - hetero early-exit file attachments', () => 
     );
   });
 
+  it('records the device a failed dispatch was routed to on the operation error', async () => {
+    heteroAgentConfig.model = 'amp';
+    heteroAgentConfig.provider = 'amp';
+    heteroAgentConfig.agencyConfig = {
+      boundDeviceId: 'device-1',
+      executionTarget: 'device',
+      heterogeneousProvider: { type: 'amp' },
+    } as any;
+    mockDispatchAgentRun.mockResolvedValueOnce({ error: 'DEVICE_OFFLINE', success: false });
+    const completeOperationSpy = vi
+      .spyOn(CompletionLifecycle.prototype, 'completeOperation')
+      .mockResolvedValue(undefined);
+
+    await service.execAgent({ agentId: 'agent-1', prompt: 'Use Amp on my device' });
+
+    // A Goal waiting for this device to come back reads the route from here
+    // instead of re-deriving which device and pool the dispatch picked.
+    expect(completeOperationSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.objectContaining({
+          deviceRoute: { deviceId: 'device-1', userId },
+        }),
+      }),
+      'error',
+      { skipErrorMessageWrite: true },
+    );
+    completeOperationSpy.mockRestore();
+  });
+
   it('resumes Amp natively without loading or injecting fallback history', async () => {
     mockGetHeterogeneousResumeSessionId.mockResolvedValue('amp-thread-existing');
     heteroAgentConfig.model = 'amp';
@@ -758,6 +813,28 @@ describe('AiAgentService.execAgent - hetero early-exit file attachments', () => 
       expect.objectContaining({
         args: ['--agent-arg=-c', '--agent-arg=model = "gpt-5.4"', '--effort', 'xhigh'],
       }),
+    );
+  });
+
+  it('dispatches a reused topic to the device it ran on after the agent moved to the sandbox', async () => {
+    heteroAgentConfig.agencyConfig = {
+      executionTarget: 'sandbox',
+      heterogeneousProvider: { type: 'claude-code' },
+    } as any;
+    topicMock.findById.mockResolvedValue({
+      id: 'topic-existing',
+      metadata: { boundDeviceId: 'device-2', workingDirectory: '/Users/alice/work' },
+    });
+
+    await service.execAgent({
+      agentId: 'agent-1',
+      appContext: { topicId: 'topic-existing' },
+      prompt: 'Keep going where you were',
+    } as any);
+
+    expect(mockSpawnHeteroSandbox).not.toHaveBeenCalled();
+    expect(mockDispatchAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/Users/alice/work', deviceId: 'device-2' }),
     );
   });
 
@@ -1904,6 +1981,109 @@ describe('AiAgentService.execAgent - hetero early-exit file attachments', () => 
       // Otherwise this child would never be recognized by
       // heteroIngest/heteroFinish at all.
       expect(findRunningOpSeed()).toBeDefined();
+    });
+  });
+  /**
+   * A cloud-sandbox `runCommand` rejection is the ONLY dispatch failure that can
+   * land after the agent already started — it is issued with `background: true`
+   * but the sandbox gateway can answer `Gateway Timeout` a minute later, long
+   * after the sandbox booted and started streaming through `heteroIngest`.
+   */
+  describe('cloud sandbox spawn failure vs. a live run', () => {
+    let completeOperationSpy: MockInstance<CompletionLifecycle['completeOperation']>;
+    let findOperationSpy: MockInstance<AgentOperationModel['findById']>;
+
+    beforeEach(() => {
+      completeOperationSpy = vi
+        .spyOn(CompletionLifecycle.prototype, 'completeOperation')
+        .mockResolvedValue(undefined as any);
+      findOperationSpy = vi
+        .spyOn(AgentOperationModel.prototype, 'findById')
+        .mockResolvedValue({ status: 'running' } as any);
+    });
+
+    afterEach(() => {
+      completeOperationSpy.mockRestore();
+      findOperationSpy.mockRestore();
+    });
+
+    const errorBubbleUpdates = () => mockMessageUpdate.mock.calls.filter((call) => call[1]?.error);
+
+    it('finalizes the run when the sandbox never came up', async () => {
+      mockSpawnHeteroSandbox.mockRejectedValueOnce(new Error('Gateway Timeout'));
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'clean the worktrees' });
+
+      await vi.waitFor(() => expect(errorBubbleUpdates()).toHaveLength(1));
+      expect(errorBubbleUpdates()[0][1]).toEqual(
+        expect.objectContaining({
+          error: expect.objectContaining({
+            body: { detail: 'Gateway Timeout' },
+            message: 'Hetero sandbox spawn failed',
+          }),
+        }),
+      );
+      expect(completeOperationSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        'error',
+        expect.anything(),
+      );
+      expect(mockPublishAgentRuntimeEnd).toHaveBeenCalled();
+    });
+
+    /**
+     * ROOT CAUSE:
+     *
+     * The catch finalized on every rejection, so a gateway 504 arriving after a
+     * successful run blanked the assistant message and stamped an error bubble
+     * on a turn the user had already read.
+     */
+    it('leaves a run that already finished alone', async () => {
+      findOperationSpy.mockResolvedValue({ status: 'done' } as any);
+      mockSpawnHeteroSandbox.mockRejectedValueOnce(new Error('Gateway Timeout'));
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'clean the worktrees' });
+
+      await vi.waitFor(() => expect(findOperationSpy).toHaveBeenCalled());
+      expect(errorBubbleUpdates()).toHaveLength(0);
+      expect(completeOperationSpy).not.toHaveBeenCalled();
+      expect(mockPublishAgentRuntimeEnd).not.toHaveBeenCalled();
+    });
+
+    /**
+     * ROOT CAUSE:
+     *
+     * Same 504, but arriving mid-run: finalizing closed the UI stream and marked
+     * the op failed while the sandbox was still producing output, so the
+     * conversation stopped dead at the moment the 504 landed.
+     */
+    it('leaves a run that is still ingesting turns alone', async () => {
+      mockSpawnHeteroSandbox.mockImplementationOnce(async ({ operationId }: any) => {
+        // The sandbox is alive and has already persisted an assistant turn.
+        topicMock.findById.mockResolvedValue({
+          metadata: { heteroCurrentMsgId: { msgId: 'msg-live', operationId } },
+        });
+        throw new Error('Gateway Timeout');
+      });
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'clean the worktrees' });
+
+      await vi.waitFor(() => expect(topicMock.findById).toHaveBeenCalled());
+      expect(errorBubbleUpdates()).toHaveLength(0);
+      expect(completeOperationSpy).not.toHaveBeenCalled();
+      expect(mockPublishAgentRuntimeEnd).not.toHaveBeenCalled();
+    });
+
+    it('still finalizes when the topic pointer names a different operation', async () => {
+      topicMock.findById.mockResolvedValue({
+        metadata: { heteroCurrentMsgId: { msgId: 'msg-old', operationId: 'op-previous-turn' } },
+      });
+      mockSpawnHeteroSandbox.mockRejectedValueOnce(new Error('Gateway Timeout'));
+
+      await service.execAgent({ agentId: 'agent-1', prompt: 'clean the worktrees' });
+
+      await vi.waitFor(() => expect(errorBubbleUpdates()).toHaveLength(1));
+      expect(completeOperationSpy).toHaveBeenCalled();
     });
   });
 });

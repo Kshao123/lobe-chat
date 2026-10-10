@@ -3,7 +3,14 @@
  * Each ComputerRuntime subclass maps its raw service response into this shape.
  */
 export interface ServiceResult {
-  error?: { message: string; name?: string };
+  error?: {
+    code?: string;
+    doc_url?: string;
+    hint?: string;
+    message: string;
+    name?: string;
+    status?: number;
+  };
   result: any;
   /** The execution workspace was recreated before this call. */
   sessionExpiredAndRecreated?: boolean;
@@ -25,6 +32,8 @@ export interface ReadFileParams {
   /** Working directory a relative `path` resolves against on the service side. */
   cwd?: string;
   endLine?: number;
+  /** 0-based end-exclusive line window (local-system). */
+  loc?: [number, number];
   path: string;
   startLine?: number;
 }
@@ -202,6 +211,8 @@ export interface ReadFileState {
   totalCharCount?: number;
   /** Total line count of the entire file */
   totalLines?: number;
+  /** The service cut the content at its character cap before the window ended */
+  truncated?: boolean;
 }
 
 export interface WriteFileState {
@@ -291,6 +302,8 @@ export interface GetCommandOutputState {
   running?: boolean;
   /** The sandbox workspace was recreated before polling this command. */
   sessionExpiredAndRecreated?: boolean;
+  /** The signal that terminated the command, when one did. */
+  signal?: string;
   stderr?: string;
   stdout?: string;
   success: boolean;

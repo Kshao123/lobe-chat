@@ -3,26 +3,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LocalFileProtocolManager } from '../LocalFileProtocolManager';
 
-const { mockApp, mockProtocol, mockReadFile, mockRealpath, mockStat, protocolHandlerRef } =
-  vi.hoisted(() => {
-    const protocolHandlerRef = { current: null as any };
+const {
+  mockApp,
+  mockCopyFile,
+  mockMkdir,
+  mockProtocol,
+  mockReadFile,
+  mockRealpath,
+  mockStat,
+  protocolHandlerRef,
+} = vi.hoisted(() => {
+  const protocolHandlerRef = { current: null as any };
 
-    return {
-      mockApp: {
-        isReady: vi.fn().mockReturnValue(true),
-        whenReady: vi.fn().mockResolvedValue(undefined),
-      },
-      mockProtocol: {
-        handle: vi.fn((_scheme: string, handler: any) => {
-          protocolHandlerRef.current = handler;
-        }),
-      },
-      mockReadFile: vi.fn(),
-      mockRealpath: vi.fn(),
-      mockStat: vi.fn(),
-      protocolHandlerRef,
-    };
-  });
+  return {
+    mockApp: {
+      isReady: vi.fn().mockReturnValue(true),
+      whenReady: vi.fn().mockResolvedValue(undefined),
+    },
+    mockProtocol: {
+      handle: vi.fn((_scheme: string, handler: any) => {
+        protocolHandlerRef.current = handler;
+      }),
+    },
+    mockCopyFile: vi.fn(),
+    mockMkdir: vi.fn(),
+    mockReadFile: vi.fn(),
+    mockRealpath: vi.fn(),
+    mockStat: vi.fn(),
+    protocolHandlerRef,
+  };
+});
 
 vi.mock('electron', () => ({
   app: mockApp,
@@ -30,6 +40,8 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('node:fs/promises', () => ({
+  copyFile: mockCopyFile,
+  mkdir: mockMkdir,
   realpath: mockRealpath,
   readFile: mockReadFile,
   stat: mockStat,
@@ -101,6 +113,32 @@ describe('LocalFileProtocolManager', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('Content-Type')).toBe('image/png');
     expect(response.headers.get('Content-Length')).toBe(String(pngBytes.byteLength));
+  });
+
+  it('exposes the file mtime so refreshed previews can detect a replaced file', async () => {
+    mockStat.mockImplementation(async () => ({
+      isFile: () => true,
+      mtimeMs: 1_700_000_000_123,
+      size: 4,
+    }));
+    mockReadFile.mockResolvedValue(Buffer.from('demo'));
+
+    const manager = new LocalFileProtocolManager();
+    manager.registerHandler();
+    await manager.approveWorkspaceRoot('/Users/alice/project');
+    const url = await manager.createPreviewUrl({
+      filePath: '/Users/alice/project/demo.mp4',
+      workspaceRoot: '/Users/alice/project',
+    });
+    if (!url) throw new Error('Expected local file preview URL');
+
+    const response = await protocolHandlerRef.current({
+      headers: new Headers(),
+      method: 'GET',
+      url,
+    });
+
+    expect(response.headers.get('X-Preview-Modified-At')).toBe('1700000000123');
   });
 
   it('short-circuits oversized documents without reading them', async () => {
@@ -484,6 +522,45 @@ describe('LocalFileProtocolManager', () => {
         workspaceRoot: '/Users/alice/project',
       }),
     ).resolves.toBeNull();
+  });
+
+  it('copies an external publish asset into the workspace without lasting approval', async () => {
+    const manager = new LocalFileProtocolManager();
+
+    await expect(
+      manager.copyExternalFileForPublish({
+        filePath: '/outside/logo.png',
+        targetPath: '/Users/alice/project/.lobe-artifacts/site/logo.png',
+        workspaceRoot: '/Users/alice/project',
+      }),
+    ).resolves.toBe(true);
+
+    expect(mockMkdir).toHaveBeenCalledWith('/Users/alice/project/.lobe-artifacts/site', {
+      recursive: true,
+    });
+    expect(mockCopyFile).toHaveBeenCalledWith(
+      '/outside/logo.png',
+      '/Users/alice/project/.lobe-artifacts/site/logo.png',
+    );
+    await expect(
+      manager.createPreviewUrl({
+        filePath: '/outside/logo.png',
+        workspaceRoot: '/Users/alice/project',
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it('refuses to copy a publish asset to a path outside the workspace', async () => {
+    const manager = new LocalFileProtocolManager();
+
+    await expect(
+      manager.copyExternalFileForPublish({
+        filePath: '/outside/logo.png',
+        targetPath: '/Users/alice/project/../elsewhere/logo.png',
+        workspaceRoot: '/Users/alice/project',
+      }),
+    ).resolves.toBe(false);
+    expect(mockCopyFile).not.toHaveBeenCalled();
   });
 
   it('rejects an external publish asset over the limit before reading it', async () => {

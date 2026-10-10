@@ -6,6 +6,7 @@ import {
   ReactImagePlugin,
   ReactLinkPlugin,
   ReactLiteXmlPlugin,
+  ReactMathPlugin,
   ReactMentionPlugin,
   ReactTablePlugin,
   ReactToolbarPlugin,
@@ -25,6 +26,7 @@ import InlineToolbar from './InlineToolbar';
 import LinearFilePlugin from './LinearFilePlugin';
 import { registerAttachmentClickOpen } from './registerAttachmentClickOpen';
 import { registerBlockDecoratorCaretGuard } from './registerBlockDecoratorCaretGuard';
+import { needsImageRehost, rehostImage } from './rehostImage';
 import { useFileUpload, useImageUpload } from './useImageUpload';
 
 const IMAGE_FILTERS = [
@@ -47,7 +49,7 @@ const fileNodeStyles = createStaticStyles(({ css }) => ({
  */
 const STATIC_PLUGINS = [
   ReactLiteXmlPlugin,
-  ...createChatInputRichPlugins({ linkPlugin: ReactLinkPlugin }),
+  ...createChatInputRichPlugins({ linkPlugin: ReactLinkPlugin, mathPlugin: false }),
   // The kernel reads a plugin's config once at init, and `mentionOption` can
   // arrive later (workspace pages resolve their member source asynchronously),
   // so pin the member chip's markdown form here rather than relying on
@@ -107,6 +109,7 @@ export interface InternalEditorProps extends EditorCanvasProps {
  */
 const InternalEditor = memo<InternalEditorProps>(
   ({
+    allowContentBleed,
     blockImageCaretGuard = false,
     className,
     contentChangeLockRef,
@@ -114,6 +117,7 @@ const InternalEditor = memo<InternalEditorProps>(
     disabled,
     editable = true,
     editor,
+    enableInlineMath = true,
     extraPlugins,
     floatingToolbar = true,
     getPopupContainer,
@@ -123,6 +127,7 @@ const InternalEditor = memo<InternalEditorProps>(
     onPressEnter,
     placeholder,
     plugins: customPlugins,
+    readonlySelectionItems,
     slashItems,
     style,
     toolbarExtraItems,
@@ -151,11 +156,11 @@ const InternalEditor = memo<InternalEditorProps>(
         maxWidth: '100%',
         minWidth: 0,
         opacity: disabled ? 0.65 : undefined,
-        overflow: 'hidden',
+        overflow: allowContentBleed ? 'visible' : 'hidden',
         pointerEvents: disabled ? 'none' : undefined,
         width: '100%',
       }),
-      [disabled],
+      [allowContentBleed, disabled],
     );
 
     // Build plugins array
@@ -165,7 +170,10 @@ const InternalEditor = memo<InternalEditorProps>(
 
       const imagePlugin = Editor.withProps(ReactImagePlugin, {
         defaultBlockImage: true,
+        handleRehost: rehostImage,
         handleUpload: handleImageUpload,
+        needRehost: (url: string) =>
+          !!editor.getLexicalEditor?.()?.isEditable() && needsImageRehost(url),
         onPickFile: isDesktop ? handlePickFile : undefined,
       });
 
@@ -174,15 +182,19 @@ const InternalEditor = memo<InternalEditorProps>(
         theme: { file: fileNodeStyles.fileWrapper as unknown as string },
       });
 
+      const mathPlugin = Editor.withProps(ReactMathPlugin, { enableInlineMath });
+
       // Build base plugins with optional extra plugins prepended
       const basePlugins = extraPlugins
-        ? [...extraPlugins, ...STATIC_PLUGINS, imagePlugin, filePlugin]
-        : [...STATIC_PLUGINS, imagePlugin, filePlugin];
+        ? [...extraPlugins, ...STATIC_PLUGINS, mathPlugin, imagePlugin, filePlugin]
+        : [...STATIC_PLUGINS, mathPlugin, imagePlugin, filePlugin];
 
-      // Add toolbar only when the editor is actually editable — a locked /
-      // read-only page must not surface the floating formatting toolbar on
-      // text selection (its buttons would dispatch commands that never save).
-      if (floatingToolbar && editable && !disabled) {
+      if (!floatingToolbar || disabled) return basePlugins;
+
+      // The formatting toolbar only when the editor is actually editable — a
+      // locked / read-only page must not surface it on text selection (its
+      // buttons would dispatch commands that never save).
+      if (editable) {
         return [
           ...basePlugins,
           Editor.withProps(ReactToolbarPlugin, {
@@ -198,6 +210,26 @@ const InternalEditor = memo<InternalEditorProps>(
         ];
       }
 
+      // A read-only body can still be selected; selection-scoped actions that
+      // never edit (comment on it, ask about it) stay reachable through a
+      // toolbar that carries nothing else.
+      if (readonlySelectionItems?.length) {
+        return [
+          ...basePlugins,
+          Editor.withProps(ReactToolbarPlugin, {
+            children: (
+              <InlineToolbar
+                floating
+                selectionOnly
+                editor={editor}
+                editorState={editorState}
+                extraItems={readonlySelectionItems}
+              />
+            ),
+          }),
+        ];
+      }
+
       return basePlugins;
     }, [
       customPlugins,
@@ -205,11 +237,13 @@ const InternalEditor = memo<InternalEditorProps>(
       editable,
       editor,
       editorState,
+      enableInlineMath,
       extraPlugins,
       floatingToolbar,
       handleFileUpload,
       handleImageUpload,
       handlePickFile,
+      readonlySelectionItems,
       toolbarExtraItems,
     ]);
 
@@ -233,7 +267,7 @@ const InternalEditor = memo<InternalEditorProps>(
 
     // Opt-in (comment editors): keep the caret out of the root node around
     // block images by pushing an empty paragraph next to the image instead of
-    // showing Lexical's horizontal root-level caret (LOBE-13882).
+    // showing Lexical's horizontal root-level caret.
     useEffect(() => {
       if (!editor || !blockImageCaretGuard) return;
       const unregister = registerBlockDecoratorCaretGuard(editor);

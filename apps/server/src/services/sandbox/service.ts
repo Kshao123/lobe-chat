@@ -105,7 +105,11 @@ export class SandboxMiddlewareService implements SandboxService {
   async exportAndUploadFile(
     path: string,
     filename: string,
-    options?: { storageName?: string },
+    options?: {
+      /** Server-owned file-record metadata, e.g. Agent Share provenance. */
+      metadata?: Record<string, unknown>;
+      storageName?: string;
+    },
   ): Promise<SandboxExportFileResult> {
     const { fileService, topicId } = this.options;
 
@@ -148,8 +152,8 @@ export class SandboxMiddlewareService implements SandboxService {
       if (!exported.success) {
         return {
           error: {
+            ...exported.error,
             message: exported.error?.message || 'Failed to export file from sandbox',
-            name: exported.error?.name,
           },
           filename,
           success: false,
@@ -169,6 +173,7 @@ export class SandboxMiddlewareService implements SandboxService {
       const { fileId, url } = await fileService.createFileRecord({
         fileHash,
         fileType: mimeType,
+        ...(options?.metadata ? { metadata: options.metadata } : {}),
         name: filename,
         size: fileSize,
         url: key,

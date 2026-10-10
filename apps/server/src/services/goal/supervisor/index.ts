@@ -9,6 +9,7 @@ import type {
 } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 
+import { TopicTrigger } from '@/const/topic';
 import { AgentModel } from '@/database/models/agent';
 import { AgentOperationModel } from '@/database/models/agentOperation';
 import { GoalModel } from '@/database/models/goal';
@@ -20,6 +21,7 @@ import type { LobeChatDatabase } from '@/database/type';
 import { AiAgentService } from '@/server/services/aiAgent';
 
 import { resolveGoalModelConfig } from '../modelConfig';
+import { countUnchargedRuns } from '../recoveryPolicy';
 import { scheduleGoalAdvance } from '../scheduler';
 import { claimGoalTask } from '../taskClaim';
 import {
@@ -102,6 +104,7 @@ export class GoalSupervisorService {
       const topic = await new TopicModel(tx, this.userId, this.workspaceId).create({
         agentId: agent.id,
         title: `Supervision: ${goal.title}`,
+        trigger: TopicTrigger.GoalSupervision,
       });
       const state = await model.updateSupervisorState(goal.id, 0, {
         agentId: agent.id,
@@ -162,6 +165,7 @@ export class GoalSupervisorService {
         task,
         failedOperation,
         statusAuthoredByActor(await taskModel.getActivities(task.id, 20), task.status),
+        countUnchargedRuns(runs),
       );
       if (eligibility.eligible && (await this.budgetBlocked(graph))) {
         eligibility = {
@@ -337,6 +341,7 @@ export class GoalSupervisorService {
             await new TaskModel(tx, this.userId, this.workspaceId).getActivities(task.id, 20),
             currentTask.status,
           ),
+          countUnchargedRuns(currentRuns),
         ).eligible ||
         (await new GoalSupervisorService(tx, this.userId, this.workspaceId).budgetBlocked(
           currentGraph,

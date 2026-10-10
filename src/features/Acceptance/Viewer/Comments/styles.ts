@@ -14,13 +14,9 @@ import { createStaticStyles, cssVar } from 'antd-style';
 export const TIMELINE_NODE = 32;
 const NODE_GUTTER = 12;
 const EVENT_DOT = 20;
-/**
- * GitHub does not run the rail through the avatars. It runs it just inside the
- * content column's left edge, where the opaque comment boxes cover it and only
- * the gaps between turns show a line; the avatar hangs off to its left.
- * Measured off the reference: 19px in from the box.
- */
-const RAIL = TIMELINE_NODE + NODE_GUTTER + 19;
+/** Space between submitted records. The composer sits outside the timeline. */
+const ENTRY_GAP = 16;
+const RAIL = TIMELINE_NODE / 2;
 
 /**
  * The accent, diluted well past the reference. A blue box line reads much
@@ -44,9 +40,6 @@ export const styles = createStaticStyles(({ css }) => ({
   `,
   /** A discussion message: header strip, then the words. */
   box: css`
-    /* Positioned so it paints after the entry's rail pseudo-element. Without
-       it the line ran straight over the box and clipped the first glyph of
-       every line that crossed x = RAIL. */
     position: relative;
 
     flex: 1;
@@ -96,13 +89,9 @@ export const styles = createStaticStyles(({ css }) => ({
   `,
   /** The composer, wrapped so it reads as one block rather than a loose field. */
   composerBlock: css`
-    /* Same reason as the message box: it has to cover the rail, not sit under it. */
-    position: relative;
-
     padding: 12px;
     border: 1px solid ${cssVar.colorBorderSecondary};
     border-radius: ${cssVar.borderRadius};
-
     background: ${cssVar.colorBgContainer};
   `,
   deleted: css`
@@ -120,6 +109,8 @@ export const styles = createStaticStyles(({ css }) => ({
    * the dot, which read as a smudge rather than as a node on the line.
    */
   eventDot: css`
+    position: relative;
+
     display: inline-flex;
     flex: none;
     align-items: center;
@@ -138,6 +129,22 @@ export const styles = createStaticStyles(({ css }) => ({
     flex: none;
     font-size: 12px;
     color: ${cssVar.colorTextTertiary};
+  `,
+  /** The timestamp doubles as the permalink: quiet until you reach for it. */
+  timeLink: css`
+    cursor: pointer;
+
+    padding: 0;
+    border: none;
+
+    background: none;
+
+    transition: color ${cssVar.motionDurationFast};
+
+    &:hover {
+      color: ${cssVar.colorText};
+      text-decoration: underline;
+    }
   `,
   panelBody: css`
     padding-block-start: 6px;
@@ -199,7 +206,7 @@ export const styles = createStaticStyles(({ css }) => ({
   `,
   /**
    * A headline is a sentence, not a name: it may wrap, and it must never be
-   * cut at the name cap — "Acceptance Builder 已完成…" says nothing.
+   * cut at the name cap — "Acceptance Builder 提交了…" says nothing.
    */
   headline: css`
     min-width: 0;
@@ -219,31 +226,12 @@ export const styles = createStaticStyles(({ css }) => ({
   nodelessEntry: css`
     padding-inline-start: ${TIMELINE_NODE + NODE_GUTTER}px;
   `,
-  /** An event has no avatar; its dot takes the rail's place on the line. */
-  eventEntry: css`
-    padding-inline-start: ${RAIL - EVENT_DOT / 2}px;
-  `,
   /**
-   * The stream's last turn. Without this the rail stopped at the composer's top
-   * edge and the box hung off the end of the line instead of closing it.
+   * Only the historical stream connects nodes. Read-only cards and the composer
+   * can reuse entry styles without accidentally extending the rail.
    */
-  tailEntry: css`
-    /* Outranks the last-of-type truncation, which would otherwise stop the
-       line 10px in and leave the composer hanging off the end. */
-    &&&::before {
-      inset-block: 0;
-      height: auto;
-    }
-  `,
-  /**
-   * The continuous line behind the nodes. Drawn on the entry rather than the
-   * list so the last entry can stop it, and inset to the node's centre.
-   */
-  timelineEntry: css`
-    position: relative;
-    padding-block-end: 14px;
-
-    &::before {
+  timeline: css`
+    > *::before {
       content: '';
 
       position: absolute;
@@ -255,27 +243,42 @@ export const styles = createStaticStyles(({ css }) => ({
       background: ${cssVar.colorBorderSecondary};
     }
 
+    > :first-child::before {
+      inset-block-start: ${TIMELINE_NODE / 2}px;
+    }
+
+    > :last-child::before {
+      inset-block-end: auto;
+      height: ${TIMELINE_NODE / 2}px;
+    }
+
+    > :only-child::before {
+      content: none;
+    }
+  `,
+  timelineEntry: css`
+    position: relative;
+    padding-block-end: ${ENTRY_GAP}px;
+
     &:hover [data-comment-actions] {
       opacity: 1;
     }
-
-    &:first-of-type::before {
-      inset-block-start: ${EVENT_DOT / 2}px;
-    }
-
-    &:last-of-type::before {
-      inset-block-end: auto;
-      height: ${EVENT_DOT / 2}px;
-    }
   `,
-  /** The author's column, left of the rail — GitHub keeps the face off the line. */
+  /** Avatars and event dots share one centre line, with an opaque node above it. */
   timelineNode: css`
+    position: relative;
+
     display: flex;
     flex: none;
+    align-items: center;
     justify-content: center;
 
     width: ${TIMELINE_NODE}px;
+    height: ${TIMELINE_NODE}px;
+    border-radius: 50%;
 
     line-height: 0;
+
+    background: ${cssVar.colorBgContainer};
   `,
 }));

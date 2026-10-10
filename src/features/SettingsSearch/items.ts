@@ -6,7 +6,6 @@ export interface SettingsSearchContext {
   enableBusinessFeatures: boolean;
   enableComposio: boolean;
   enableGatewayMode: boolean;
-  enableSTT: boolean;
   /** Whether the signed-in user has an email on their profile */
   hasEmail: boolean;
   hideDocs: boolean;
@@ -70,6 +69,13 @@ export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<SettingsTabs, string[]>> = {
   [SettingsTabs.Hotkey]: ['hotkey', 'shortcut', 'keyboard'],
   [SettingsTabs.Labs]: ['labs', 'experiment', 'beta', 'preview', 'developer'],
   [SettingsTabs.Memory]: ['memory', 'memories', 'personalization'],
+  [SettingsTabs.Environments]: [
+    'sandbox',
+    'environments',
+    'instances',
+    'setup script',
+    'repository',
+  ],
   [SettingsTabs.Messenger]: [
     'messenger',
     'chat platform',
@@ -79,6 +85,7 @@ export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<SettingsTabs, string[]>> = {
     'discord',
     'wechat',
   ],
+  [SettingsTabs.Integrations]: ['integrations', 'github', 'pull request', 'ci', 'review', 'merge'],
   [SettingsTabs.Notification]: [
     'notification',
     'email',
@@ -123,10 +130,6 @@ export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<SettingsTabs, string[]>> = {
     'model assignment',
     'topic naming',
     'translation',
-    'tts',
-    'tts settings',
-    'voice',
-    'speech',
     'image',
     'image generation',
     'embedding',
@@ -150,6 +153,7 @@ export const TAB_SEARCH_EN_KEYWORDS: Partial<Record<SettingsTabs, string[]>> = {
     'account deletion',
     'delete account',
   ],
+  [SettingsTabs.Trash]: ['trash', 'recycle bin', 'deleted', 'restore', 'undelete', 'recover'],
   [SettingsTabs.SystemTools]: [
     'system tools',
     'built-in tools',
@@ -184,6 +188,7 @@ export const TAB_SEARCH_KEYWORDS_KEYS: Partial<Record<SettingsTabs, string>> = {
   [SettingsTabs.Labs]: 'settingsSearch.tabKeywords.labs',
   [SettingsTabs.Memory]: 'settingsSearch.tabKeywords.memory',
   [SettingsTabs.Messenger]: 'settingsSearch.tabKeywords.messenger',
+  [SettingsTabs.Integrations]: 'settingsSearch.tabKeywords.integrations',
   [SettingsTabs.Notification]: 'settingsSearch.tabKeywords.notification',
   [SettingsTabs.OAuthApps]: 'settingsSearch.tabKeywords.oauthApps',
   [SettingsTabs.Plans]: 'settingsSearch.tabKeywords.plans',
@@ -196,6 +201,7 @@ export const TAB_SEARCH_KEYWORDS_KEYS: Partial<Record<SettingsTabs, string>> = {
   [SettingsTabs.Stats]: 'settingsSearch.tabKeywords.stats',
   [SettingsTabs.Storage]: 'settingsSearch.tabKeywords.storage',
   [SettingsTabs.SystemTools]: 'settingsSearch.tabKeywords.systemTools',
+  [SettingsTabs.Trash]: 'settingsSearch.tabKeywords.trash',
   [SettingsTabs.Usage]: 'settingsSearch.tabKeywords.usage',
 };
 
@@ -371,6 +377,13 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     labelKey: 'settingChatAppearance.fontSize.title',
     tab: SettingsTabs.Appearance,
   },
+  {
+    anchor: 'appearance-font-antialiasing',
+    descKey: 'settingAppearance.font.antialiasing.desc',
+    keywords: ['font', 'antialiasing', 'smoothing', 'text', 'rendering'],
+    labelKey: 'settingAppearance.font.antialiasing.title',
+    tab: SettingsTabs.Appearance,
+  },
   // System Tools
   {
     anchor: 'system-tools-shell',
@@ -445,13 +458,6 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ['follow up', 'input completion', 'prompt rewrite', 'suggestion'],
     labelKey: 'serviceModel.optionalFeatures.title',
     tab: SettingsTabs.ServiceModel,
-  },
-  {
-    anchor: 'service-model-tts',
-    keywords: ['tts', 'tts settings', 'voice', 'speech', 'text to speech'],
-    labelKey: 'settingTTS.openai.ttsModel',
-    tab: SettingsTabs.ServiceModel,
-    visible: (ctx) => ctx.enableSTT,
   },
   {
     anchor: 'service-model-image',

@@ -10,7 +10,7 @@ import AcceptanceCheckInventory from './Checks/AcceptanceCheckInventory';
 import AcceptanceCheckOwnerToolbar from './Checks/AcceptanceCheckOwnerToolbar';
 import AcceptanceDiscussion from './Comments/AcceptanceDiscussion';
 import { commentIdFromHash } from './Comments/anchor';
-import { messageThreads } from './Comments/discussionTimeline';
+import { countDiscussionMessages } from './Comments/discussionTimeline';
 import { useAcceptanceComments } from './Comments/hooks';
 import ReviewerApprovalBar from './Comments/ReviewerApprovalBar';
 import AcceptanceOriginTopic from './Conversation/AcceptanceOriginTopic';
@@ -21,7 +21,6 @@ import AcceptanceEnterFocus from './Focus/AcceptanceEnterFocus';
 import AcceptanceGoal from './Header/AcceptanceGoal';
 import AcceptanceGoalEdit from './Header/AcceptanceGoalEdit';
 import AcceptanceIdentity from './Header/AcceptanceIdentity';
-import AcceptanceSharedNotice from './Header/AcceptanceSharedNotice';
 import AcceptanceStatusControl from './Header/AcceptanceStatusControl';
 import type { AcceptanceTabKey } from './Header/AcceptanceTabs';
 import AcceptanceTabs from './Header/AcceptanceTabs';
@@ -65,7 +64,7 @@ export const AcceptanceOverview = ({
   const { acceptanceId, embedded } = useAcceptanceScope();
   const { turn } = useAcceptanceTurn(embedded);
   const { data } = useAcceptanceBundle(acceptanceId);
-  const { threads } = useAcceptanceComments(acceptanceId);
+  const { items, threads } = useAcceptanceComments(acceptanceId);
   const [requestedTab, setTab] = useState<AcceptanceTabKey>();
   // A link to one comment has to land on the tab that shows it. The reader can
   // still leave: their own tab choice, once made, outranks the fragment.
@@ -90,7 +89,6 @@ export const AcceptanceOverview = ({
     <>
       <Flexbox className={styles.headerBand}>
         <Flexbox className={styles.column} gap={12}>
-          <AcceptanceSharedNotice />
           <AcceptanceIdentity
             focusSlot={<AcceptanceEnterFocus />}
             statusSlot={<AcceptanceStatusControl />}
@@ -104,9 +102,15 @@ export const AcceptanceOverview = ({
             <AcceptanceTabs
               active={tab}
               checkCount={checks.length}
-              discussionCount={messageThreads(threads).length}
               flowCount={md ? flowCount : 0}
               resourceCount={resourceCount}
+              discussionCount={countDiscussionMessages({
+                approvals: [],
+                checks: data?.checks,
+                items,
+                rounds: data?.rounds.map(({ run }) => run) ?? [],
+                threads,
+              })}
               onChange={setTab}
             />
           </Flexbox>

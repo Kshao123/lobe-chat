@@ -2,6 +2,8 @@ import type { SandboxCallToolResult } from '@lobechat/builtin-tool-cloud-sandbox
 import type { CodeInterpreterToolName } from '@lobehub/market-sdk';
 import debug from 'debug';
 
+import { getToolAccessDeniedError } from '@/server/services/toolExecution/errorClassification';
+
 import { SandboxMiddlewareService } from '../service';
 import type {
   SandboxProvider,
@@ -50,28 +52,49 @@ export class MarketSandboxProvider implements SandboxProvider {
     toolName: string,
     params: Record<string, unknown>,
   ): Promise<SandboxCallToolResult> {
-    const { marketService, topicId, userId } = this.options;
+    const {
+      marketService,
+      sandboxCwd,
+      sandboxInstanceId,
+      sandboxMode,
+      sandboxSpecification,
+      sandboxWorkingDir,
+      topicId,
+      userId,
+    } = this.options;
 
     log(
-      'Calling sandbox tool: %s with params: %O, topicId: %s',
+      'Calling sandbox tool: %s with params: %O, topicId: %s, mode: %s',
       toolName,
       redactSandboxParams(params),
       topicId,
+      sandboxMode ?? 'ephemeral',
     );
 
     try {
-      const response = await marketService
-        .getSDK()
-        .plugins.runBuildInTool(toolName as CodeInterpreterToolName, params as never, {
+      const response = await marketService.getSDK().plugins.runBuildInTool(
+        toolName as CodeInterpreterToolName,
+        params as never,
+        {
+          // Cast: the published SDK's context type predates both fields. Market
+          // validates the request body with a non-strict schema, so a field it
+          // does not know yet is dropped rather than rejected — which is what
+          // `sandboxCwd` relies on until the execution plane consumes it.
+          ...(sandboxMode && { sandboxMode }),
+          ...(sandboxCwd && { sandboxCwd }),
+          ...(sandboxWorkingDir && { sandboxWorkingDir }),
+          ...(sandboxInstanceId && { sandboxInstanceId }),
+          ...(sandboxSpecification && { sandboxSpecification }),
           topicId,
           userId,
-        });
+        } as never,
+      );
 
       log('Sandbox tool %s response: %O', toolName, response);
 
       if (!response.success) {
         return {
-          error: {
+          error: getToolAccessDeniedError(response.error, response.error?.message || '') || {
             message: response.error?.message || 'Unknown error',
             name: response.error?.code,
           },
@@ -90,7 +113,7 @@ export class MarketSandboxProvider implements SandboxProvider {
       log('Error calling sandbox tool %s: %O', toolName, error);
 
       return {
-        error: {
+        error: getToolAccessDeniedError(error, (error as Error).message) || {
           message: (error as Error).message,
           name: (error as Error).name,
         },
@@ -119,7 +142,7 @@ export class MarketSandboxProvider implements SandboxProvider {
 
       if (!response.success) {
         return {
-          error: {
+          error: getToolAccessDeniedError(response.error, response.error?.message || '') || {
             message: response.error?.message || 'Failed to export file from sandbox',
             name: response.error?.code,
           },
@@ -146,7 +169,9 @@ export class MarketSandboxProvider implements SandboxProvider {
       log('Error exporting file: %O', error);
 
       return {
-        error: { message: (error as Error).message },
+        error: getToolAccessDeniedError(error, (error as Error).message) || {
+          message: (error as Error).message,
+        },
         success: false,
       };
     }

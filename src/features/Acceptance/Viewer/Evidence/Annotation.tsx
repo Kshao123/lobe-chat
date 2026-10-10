@@ -107,7 +107,16 @@ const styles = createStaticStyles(({ css }) => ({
     position: absolute;
     border: 2px solid ${cssVar.colorError};
     border-radius: 4px;
-    box-shadow: 0 0 0 1px ${cssVar.colorFillSecondary};
+
+    /*
+     * Two rings instead of one: the dark outside separates the box from a white
+     * screenshot, the light inside separates it from a dark one. The evidence
+     * image can be either, and neither the hue nor the reader's theme can tell
+     * us which — so the box carries its own contrast.
+     */
+    box-shadow:
+      0 0 0 1px rgb(0 0 0 / 45%),
+      inset 0 0 0 1px rgb(255 255 255 / 45%);
   `,
   resizeHandle: css`
     cursor: nwse-resize;
@@ -147,6 +156,7 @@ interface AnnotatedImageProps {
    */
   annotations: EvidenceOverlay[];
   imageStyle?: React.CSSProperties;
+  onLoad?: React.ReactEventHandler<HTMLImageElement>;
   /** Render the per-region notes under the image. Off when a caller already lists them. */
   showComments?: boolean;
   src: string;
@@ -154,7 +164,7 @@ interface AnnotatedImageProps {
 
 /** An evidence image with its circled regions (read-only display). */
 export const AnnotatedImage = memo<AnnotatedImageProps>(
-  ({ annotations, imageStyle, showComments = true, src }) => {
+  ({ annotations, imageStyle, onLoad, showComments = true, src }) => {
     // A badge is noise on a single unnumbered region, but required as soon as
     // anything refers to a region by number.
     const numbered = annotations.length > 1 || annotations.some((item) => item.label !== undefined);
@@ -162,7 +172,7 @@ export const AnnotatedImage = memo<AnnotatedImageProps>(
     return (
       <Flexbox gap={6} style={{ maxWidth: '100%', width: 'fit-content' }}>
         <div className={styles.frame}>
-          <img alt={''} className={styles.image} src={src} style={imageStyle} />
+          <img alt={''} className={styles.image} src={src} style={imageStyle} onLoad={onLoad} />
           {annotations.map((annotation, index) => (
             <div
               className={styles.rect}

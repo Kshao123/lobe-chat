@@ -1,13 +1,17 @@
 // @vitest-environment node
 import type * as BusinessConst from '@lobechat/business-const';
+import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as MessageModelModule from '@/database/models/message';
 import { createContextInner } from '@/libs/trpc/lambda/context';
 
+const mockServerDB = {
+  transaction: vi.fn(async (fn: (trx: unknown) => Promise<unknown>) => fn({ trx: true })),
+};
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: vi.fn(function () {
-    return {};
+    return mockServerDB;
   }),
 }));
 
@@ -48,8 +52,16 @@ vi.mock('@/server/featureFlags', () => ({
 }));
 
 const mockAccessCheck = vi.fn();
+const mockIsRunStillAuthorized = vi.fn();
+const mockLockScopedAgentRow = vi.fn();
+const mockLockUploadAdmission = vi.fn();
 vi.mock('@/database/models/agentShare', () => ({
-  AgentShareModel: { findByShareIdWithAccessCheck: (...args: any[]) => mockAccessCheck(...args) },
+  AgentShareModel: {
+    findByShareIdWithAccessCheck: (...args: any[]) => mockAccessCheck(...args),
+    isRunStillAuthorized: (...args: any[]) => mockIsRunStillAuthorized(...args),
+    lockScopedAgentRow: (...args: any[]) => mockLockScopedAgentRow(...args),
+    lockUploadAdmission: (...args: any[]) => mockLockUploadAdmission(...args),
+  },
 }));
 
 const mockFindById = vi.fn();
@@ -95,21 +107,102 @@ vi.mock('@/database/models/user', () => ({
   }),
 }));
 
+const mockDocumentFindById = vi.fn();
+const DocumentModelMock = vi.fn(function () {
+  return { findById: mockDocumentFindById };
+});
+vi.mock('@/database/models/document', () => ({
+  DocumentModel: DocumentModelMock,
+}));
+
+const mockFileFindByIds = vi.fn();
+const mockFileFindById = vi.fn();
+const mockFileCreate = vi.fn();
+const mockFileDeleteUnreferenced = vi.fn();
+const mockFileCountAgentShareUsage = vi.fn();
+const FileModelMock = vi.fn(function () {
+  return {
+    countAgentShareUsage: mockFileCountAgentShareUsage,
+    create: mockFileCreate,
+    deleteUnreferenced: mockFileDeleteUnreferenced,
+    findById: mockFileFindById,
+    findByIds: mockFileFindByIds,
+  };
+});
+vi.mock('@/database/models/file', () => ({
+  FileModel: FileModelMock,
+}));
+
+const mockReserveUpload = vi.fn();
+vi.mock('@/server/services/fileUploadReservation', () => ({
+  reserveUpload: (...args: any[]) => mockReserveUpload(...args),
+}));
+
+const mockUploadCountLiveUnderPrefix = vi.fn();
+const FileUploadModelMock = vi.fn(function () {
+  return { countLiveUsageUnderPrefix: mockUploadCountLiveUnderPrefix };
+});
+vi.mock('@/database/models/fileUpload', () => ({
+  FileUploadModel: FileUploadModelMock,
+}));
+
+const mockUploadTouchActive = vi.fn();
+const mockUploadFindLatest = vi.fn();
+const mockUploadRelease = vi.fn();
+const mockUploadReleaseBestEffort = vi.fn();
+const mockUploadFindLatestForUpdate = vi.fn();
+const mockUploadSettle = vi.fn();
+const FileUploadServiceMock = vi.fn(function () {
+  return {
+    findLatest: mockUploadFindLatest,
+    model: {
+      findLatestByPathnameForUpdate: mockUploadFindLatestForUpdate,
+      settle: mockUploadSettle,
+    },
+    release: mockUploadRelease,
+    releaseBestEffort: mockUploadReleaseBestEffort,
+    touchActive: mockUploadTouchActive,
+  };
+});
+vi.mock('@/server/services/fileUpload', () => ({
+  FileUploadService: FileUploadServiceMock,
+}));
+
+const mockCreatePreSignedUrl = vi.fn();
+vi.mock('@/server/modules/S3', () => ({
+  FileS3: vi.fn(function () {
+    return { createPreSignedUrl: mockCreatePreSignedUrl };
+  }),
+}));
+
+vi.mock('@/config/db', () => ({
+  serverDBEnv: { REMOVE_GLOBAL_FILE: true },
+}));
+
 const mockExecAgent = vi.fn();
 const mockInterruptTask = vi.fn();
+const mockSetQueuedMessages = vi.fn();
 const AiAgentServiceMock = vi.fn(function () {
   return {
     execAgent: mockExecAgent,
     interruptTask: mockInterruptTask,
+    setQueuedMessages: mockSetQueuedMessages,
   };
 });
 vi.mock('@/server/services/aiAgent', () => ({
   AiAgentService: AiAgentServiceMock,
 }));
 
+const mockGetFileAccessUrl = vi.fn();
+const mockGetFileMetadata = vi.fn();
+const mockDeleteStoredFile = vi.fn();
 vi.mock('@/server/services/file', () => ({
   FileService: vi.fn(function () {
-    return { getFileAccessUrl: vi.fn() };
+    return {
+      deleteFile: mockDeleteStoredFile,
+      getFileAccessUrl: mockGetFileAccessUrl,
+      getFileMetadata: mockGetFileMetadata,
+    };
   }),
 }));
 
@@ -139,6 +232,7 @@ const share = {
   },
   shareId: 'share-1',
   visibility: 'link',
+  workspaceId: null,
 };
 
 const visitorTopic = {
@@ -157,6 +251,8 @@ describe('shareChatRouter', () => {
     mocks.businessConst.ENABLE_BUSINESS_FEATURES = true;
     mockGetFeatureFlagsState.mockResolvedValue({ enableAgentShare: true });
     mockAccessCheck.mockResolvedValue(share);
+    mockIsRunStillAuthorized.mockResolvedValue(true);
+    mockLockScopedAgentRow.mockResolvedValue({ id: share.agentId, workspaceId: null });
     mockFindById.mockResolvedValue(visitorTopic);
     mockIsRunningOperationAlive.mockResolvedValue(true);
     mockCountBySender.mockResolvedValue(0);
@@ -165,8 +261,24 @@ describe('shareChatRouter', () => {
     mockMessageQuery.mockResolvedValue([]);
     mockExecAgent.mockResolvedValue({ operationId: 'op-1', success: true });
     mockInterruptTask.mockResolvedValue({ operationId: 'op-1', success: true });
+    mockSetQueuedMessages.mockResolvedValue({ success: true });
     mockSignUserJWT.mockResolvedValue('visitor-jwt');
     mockSpendGate.mockResolvedValue({ allowed: true });
+    mockFileFindByIds.mockResolvedValue([]);
+    mockFileFindById.mockResolvedValue(undefined);
+    mockFileCreate.mockResolvedValue({ id: 'file-new' });
+    mockFileDeleteUnreferenced.mockResolvedValue(undefined);
+    mockReserveUpload.mockResolvedValue({ id: 'upload-1', size: 10 });
+    mockCreatePreSignedUrl.mockResolvedValue('https://s3/put');
+    mockUploadTouchActive.mockResolvedValue(undefined);
+    mockUploadFindLatest.mockResolvedValue(undefined);
+    mockUploadRelease.mockResolvedValue(true);
+    mockUploadReleaseBestEffort.mockResolvedValue(undefined);
+    mockUploadFindLatestForUpdate.mockResolvedValue(undefined);
+    mockUploadSettle.mockResolvedValue(true);
+    mockGetFileAccessUrl.mockResolvedValue('https://s3/get');
+    mockGetFileMetadata.mockResolvedValue({ contentLength: 10 });
+    mockDeleteStoredFile.mockResolvedValue(undefined);
   });
 
   describe('execAgent', () => {
@@ -255,6 +367,14 @@ describe('shareChatRouter', () => {
       expect(mockExecAgent).not.toHaveBeenCalled();
     });
 
+    it('keeps the steer mark of a follow-up the visitor queued behind a running turn', async () => {
+      const caller = await createCaller();
+
+      await caller.execAgent({ prompt: 'follow up', shareId: 'share-1', steer: true });
+
+      expect(mockExecAgent).toHaveBeenCalledWith(expect.objectContaining({ steer: true }));
+    });
+
     it('dispatches a creator-scoped run carrying the share gate', async () => {
       const caller = await createCaller();
 
@@ -276,6 +396,69 @@ describe('shareChatRouter', () => {
           },
         }),
       );
+    });
+
+    describe('attachments', () => {
+      const fileIds = ['file-a', 'file-b'];
+
+      it("forwards fileIds to the run after checking each one's share provenance in the CREATOR scope", async () => {
+        mockFileFindByIds.mockResolvedValue(fileIds.map((id) => ({ id })));
+        const caller = await createCaller();
+
+        await caller.execAgent({ fileIds, prompt: 'look', shareId: 'share-1' });
+
+        expect(FileModelMock).toHaveBeenCalledWith(expect.anything(), OWNER, undefined);
+        expect(mockFileFindByIds).toHaveBeenCalledWith(fileIds, {
+          shareId: share.shareId,
+          type: 'agentShare',
+          visitorUserId: VISITOR,
+        });
+        expect(mockExecAgent).toHaveBeenCalledWith(expect.objectContaining({ fileIds }));
+      });
+
+      it('rejects with NOT_FOUND when the provenance-scoped lookup omits any id', async () => {
+        mockFileFindByIds.mockResolvedValue([{ id: 'file-a' }]);
+        const caller = await createCaller();
+
+        await expect(
+          caller.execAgent({ fileIds, prompt: 'look', shareId: 'share-1' }),
+        ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'File not found' });
+        expect(mockCountBySender).not.toHaveBeenCalled();
+        expect(mockExecAgent).not.toHaveBeenCalled();
+      });
+
+      it('accepts duplicate ids as long as each distinct id is owned', async () => {
+        mockFileFindByIds.mockResolvedValue([{ id: 'file-a' }]);
+        const caller = await createCaller();
+
+        await expect(
+          caller.execAgent({ fileIds: ['file-a', 'file-a'], prompt: 'look', shareId: 'share-1' }),
+        ).resolves.toMatchObject({ operationId: 'op-1' });
+        expect(mockFileFindByIds).toHaveBeenCalledWith(['file-a'], {
+          shareId: share.shareId,
+          type: 'agentShare',
+          visitorUserId: VISITOR,
+        });
+      });
+
+      it('skips the ownership lookup entirely when no fileIds are sent', async () => {
+        const caller = await createCaller();
+
+        await caller.execAgent({ prompt: 'hi', shareId: 'share-1' });
+
+        expect(FileModelMock).not.toHaveBeenCalled();
+      });
+
+      it('rejects more than SHARE_VISITOR_MAX_FILES_PER_TURN ids at the schema, before any lookup', async () => {
+        const caller = await createCaller();
+        const tooMany = Array.from({ length: 11 }, (_, i) => `file-${i}`);
+
+        await expect(
+          caller.execAgent({ fileIds: tooMany, prompt: 'look', shareId: 'share-1' }),
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        expect(FileModelMock).not.toHaveBeenCalled();
+        expect(mockExecAgent).not.toHaveBeenCalled();
+      });
     });
 
     // Regression for Codex P1 (`shareChat.ts` prompt schema): a
@@ -386,6 +569,416 @@ describe('shareChatRouter', () => {
     });
   });
 
+  describe('createUploadUrl', () => {
+    const prefix = `files/${OWNER}/agent-share/share-1/`;
+    const MB = 1024 * 1024;
+
+    beforeEach(() => {
+      mockFileCountAgentShareUsage.mockResolvedValue(0);
+      mockUploadCountLiveUnderPrefix.mockResolvedValue(0);
+      // Run the share's `admit` hook the way the real reservation does: inside
+      // the transaction, before anything is inserted.
+      mockReserveUpload.mockImplementation(
+        async (params: { admit?: (trx: unknown) => Promise<void>; size: number }) => {
+          await params.admit?.({ trx: true });
+          return { id: 'upload-1', size: params.size };
+        },
+      );
+    });
+
+    it("counts the share's settled files and live reservations inside the reservation transaction", async () => {
+      mockFileCountAgentShareUsage.mockResolvedValue(500 * MB);
+      mockUploadCountLiveUnderPrefix.mockResolvedValue(11 * MB);
+      const caller = await createCaller();
+
+      // 500 + 11 + 1 = 512 MB: exactly at the default cap is still admitted.
+      await caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 1 * MB });
+
+      expect(mockFileCountAgentShareUsage).toHaveBeenCalledWith('share-1', { trx: true });
+      expect(mockUploadCountLiveUnderPrefix).toHaveBeenCalledWith(prefix, { trx: true });
+      expect(mockCreatePreSignedUrl).toHaveBeenCalled();
+    });
+
+    it('serializes the cap decision on the share BEFORE counting, inside the same transaction', async () => {
+      // The counts alone are racy: nothing row-locks a sum over two tables, and
+      // the reservation's own users-row lock is taken after `admit`. Two
+      // concurrent visitors must therefore queue on the share lock first.
+      const order: string[] = [];
+      mockLockUploadAdmission.mockImplementation(async () => {
+        order.push('lock');
+      });
+      mockFileCountAgentShareUsage.mockImplementation(async () => {
+        order.push('settled');
+        return 0;
+      });
+      mockUploadCountLiveUnderPrefix.mockImplementation(async () => {
+        order.push('reserved');
+        return 0;
+      });
+      const caller = await createCaller();
+
+      await caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 10 });
+
+      expect(mockLockUploadAdmission).toHaveBeenCalledWith({ trx: true }, 'share-1');
+      expect(order).toEqual(['lock', 'settled', 'reserved']);
+    });
+
+    it('rejects a zero-byte reservation even though it would add nothing to the cap sum', async () => {
+      const caller = await createCaller();
+
+      await expect(
+        caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 0 }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mockReserveUpload).not.toHaveBeenCalled();
+    });
+
+    it("refuses with a share_limit block once the share's upload space is used up", async () => {
+      mockFileCountAgentShareUsage.mockResolvedValue(500 * MB);
+      mockUploadCountLiveUnderPrefix.mockResolvedValue(11 * MB);
+      const caller = await createCaller();
+
+      await expect(
+        caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 2 * MB }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'storage_block:share_limit' });
+      expect(mockCreatePreSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('honours a creator-configured cap and turns attachments off at 0 before any reservation', async () => {
+      mockAccessCheck.mockResolvedValue({
+        ...share,
+        shareConfig: { ...share.shareConfig, maxFileStorage: 0 },
+      });
+      const caller = await createCaller();
+
+      await expect(
+        caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 1 }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'storage_block:share_limit' });
+      expect(mockReserveUpload).not.toHaveBeenCalled();
+    });
+
+    it('refuses even a request that clears the size pre-check when the cap is 0', async () => {
+      // Guards the `maxFileStorage <= 0` branch on its own: a request whose size
+      // slips past `size > maxFileStorage` (only possible at 0 with a size of 0,
+      // which zod refuses, or via a future relaxation) must still be turned away.
+      mockAccessCheck.mockResolvedValue({
+        ...share,
+        shareConfig: { ...share.shareConfig, maxFileStorage: -1 },
+      });
+      const caller = await createCaller();
+
+      await expect(
+        caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 1 }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'storage_block:share_limit' });
+      expect(mockReserveUpload).not.toHaveBeenCalled();
+    });
+
+    it("reserves the upload under the CREATOR's storage quota and returns a share-prefixed key", async () => {
+      const caller = await createCaller();
+
+      const result = await caller.createUploadUrl({
+        name: 'cat.png',
+        shareId: 'share-1',
+        size: 10,
+      });
+
+      expect(result.pathname.startsWith(prefix)).toBe(true);
+      expect(result.pathname.endsWith('/cat.png')).toBe(true);
+      expect(result.url).toBe('https://s3/put');
+      // The quota that pays is the one reserved: creator, never the visitor.
+      expect(FileUploadModelMock).toHaveBeenCalledWith(expect.anything(), OWNER, undefined);
+      expect(mockReserveUpload).toHaveBeenCalledWith(
+        expect.objectContaining({ pathname: result.pathname, size: 10, userId: OWNER }),
+      );
+      expect(mockReserveUpload.mock.calls[0][0].workspaceId).toBeNull();
+      expect(mockCreatePreSignedUrl).toHaveBeenCalledWith(result.pathname, 10);
+    });
+
+    it('keeps a visitor-supplied name from steering the key out of the share prefix', async () => {
+      const caller = await createCaller();
+
+      const result = await caller.createUploadUrl({
+        name: '../../etc/passwd',
+        shareId: 'share-1',
+        size: 1,
+      });
+
+      expect(result.pathname.startsWith(prefix)).toBe(true);
+      expect(result.pathname.endsWith('/.._.._etc_passwd')).toBe(true);
+    });
+
+    it("collapses the creator's storage_block reason to a visitor-safe code and never reaches S3", async () => {
+      // The original reason describes the creator's billing state — a
+      // stranger with the link must not learn it.
+      mockReserveUpload.mockRejectedValue(
+        new TRPCError({ code: 'FORBIDDEN', message: 'storage_block:subscription_past_due' }),
+      );
+      const caller = await createCaller();
+
+      await expect(
+        caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 10 }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'storage_block:creator_quota' });
+      expect(mockCreatePreSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('passes other reservation failures through untouched', async () => {
+      mockReserveUpload.mockRejectedValue(
+        new TRPCError({ code: 'CONFLICT', message: 'Upload pathname is already reserved' }),
+      );
+      const caller = await createCaller();
+
+      await expect(
+        caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 10 }),
+      ).rejects.toMatchObject({ code: 'CONFLICT', message: 'Upload pathname is already reserved' });
+    });
+
+    it('releases the reservation when minting the pre-signed URL fails', async () => {
+      mockCreatePreSignedUrl.mockRejectedValue(new Error('s3 down'));
+      const caller = await createCaller();
+
+      await expect(
+        caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 10 }),
+      ).rejects.toThrow('s3 down');
+      expect(mockUploadReleaseBestEffort).toHaveBeenCalledWith(
+        expect.stringMatching(new RegExp(`^${prefix}`)),
+      );
+    });
+
+    it('rejects a file over SHARE_VISITOR_MAX_FILE_SIZE at the schema', async () => {
+      const caller = await createCaller();
+
+      await expect(
+        caller.createUploadUrl({ name: 'big.bin', shareId: 'share-1', size: 33 * 1024 * 1024 }),
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mockReserveUpload).not.toHaveBeenCalled();
+    });
+
+    it('is refused on a private share like every other visitor procedure', async () => {
+      mockAccessCheck.mockResolvedValue({ ...share, visibility: 'private' });
+      const caller = await createCaller();
+
+      await expect(
+        caller.createUploadUrl({ name: 'cat.png', shareId: 'share-1', size: 10 }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mockReserveUpload).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createFile', () => {
+    const pathname = `files/${OWNER}/agent-share/share-1/abc/cat.png`;
+    const input = {
+      fileType: 'image/png',
+      metadata: { height: 2, ratio: 0.5, width: 1 },
+      name: 'cat.png',
+      pathname,
+      shareId: 'share-1',
+      size: 10,
+    };
+
+    beforeEach(() => {
+      mockUploadTouchActive.mockResolvedValue({ id: 'upload-1', size: 10, status: 'active' });
+      mockUploadFindLatestForUpdate.mockResolvedValue({
+        id: 'upload-1',
+        size: 10,
+        status: 'active',
+      });
+    });
+
+    it('writes a creator-owned row with visitor provenance and settles the session', async () => {
+      const caller = await createCaller();
+
+      const result = await caller.createFile(input);
+
+      expect(result).toEqual({ id: 'file-new', url: 'https://s3/get' });
+      expect(FileModelMock).toHaveBeenCalledWith(expect.anything(), OWNER, undefined);
+      expect(mockFileCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileType: 'image/png',
+          metadata: expect.objectContaining({
+            agentShare: { shareId: 'share-1', visitorUserId: VISITOR },
+            dirname: `files/${OWNER}/agent-share/share-1/abc`,
+            filename: 'cat.png',
+            height: 2,
+            path: pathname,
+            width: 1,
+          }),
+          name: 'cat.png',
+          size: 10,
+          url: pathname,
+        }),
+        false,
+        expect.anything(),
+      );
+      expect(mockFileCreate.mock.calls[0][0]).not.toHaveProperty('fileHash');
+      expect(mockFileCreate.mock.calls[0][0]).not.toHaveProperty('source');
+      expect(mockUploadSettle).toHaveBeenCalledWith('upload-1', 'file-new', expect.anything());
+    });
+
+    it('serializes settlement with Agent transfer and revalidates the share after the lock', async () => {
+      const caller = await createCaller();
+
+      await caller.createFile(input);
+
+      expect(mockLockScopedAgentRow).toHaveBeenCalledWith({ trx: true }, share.agentId, {
+        userId: OWNER,
+        workspaceId: undefined,
+      });
+      expect(mockIsRunStillAuthorized).toHaveBeenCalledWith(
+        { trx: true },
+        { agentId: share.agentId, shareId: share.shareId },
+      );
+      expect(mockLockScopedAgentRow.mock.invocationCallOrder[0]).toBeLessThan(
+        mockUploadFindLatestForUpdate.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('rejects settlement when hard revocation wins the Agent row lock', async () => {
+      mockLockScopedAgentRow.mockResolvedValue(null);
+      const caller = await createCaller();
+
+      await expect(caller.createFile(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+      expect(mockFileCreate).not.toHaveBeenCalled();
+      expect(mockUploadSettle).not.toHaveBeenCalled();
+    });
+
+    it('ignores a client-supplied hash instead of registering the object for dedup', async () => {
+      const caller = await createCaller();
+
+      await caller.createFile({ ...input, hash: 'h'.repeat(64) } as typeof input);
+
+      expect(mockFileCreate.mock.calls[0][0]).not.toHaveProperty('fileHash');
+      expect(mockFileCreate.mock.calls[0][1]).toBe(false);
+    });
+
+    it('refuses a pathname outside the share prefix (a creator-owned reservation)', async () => {
+      const caller = await createCaller();
+
+      await expect(
+        caller.createFile({ ...input, pathname: `files/${OWNER}/2026/own.png` }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Upload not found' });
+      expect(mockUploadTouchActive).not.toHaveBeenCalled();
+      expect(mockFileCreate).not.toHaveBeenCalled();
+    });
+
+    it("refuses another share's prefix even for the same creator", async () => {
+      const caller = await createCaller();
+
+      await expect(
+        caller.createFile({ ...input, pathname: `files/${OWNER}/agent-share/share-2/abc/cat.png` }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(mockFileCreate).not.toHaveBeenCalled();
+    });
+
+    it('rejects when there is no active reservation (no legacy path for share uploads)', async () => {
+      mockUploadTouchActive.mockResolvedValue(undefined);
+      const caller = await createCaller();
+
+      await expect(caller.createFile(input)).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect(mockFileCreate).not.toHaveBeenCalled();
+    });
+
+    it('releases the reservation when the stored object size does not match', async () => {
+      mockGetFileMetadata.mockResolvedValue({ contentLength: 11 });
+      const caller = await createCaller();
+
+      await expect(caller.createFile(input)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'Uploaded file size mismatch',
+      });
+      expect(mockUploadReleaseBestEffort).toHaveBeenCalledWith(pathname);
+      expect(mockFileCreate).not.toHaveBeenCalled();
+    });
+
+    it('drops unknown metadata keys at the schema so provenance can only be server-written', async () => {
+      const caller = await createCaller();
+
+      await caller.createFile({
+        ...input,
+        metadata: {
+          ...input.metadata,
+          agentShare: { shareId: 'share-1', visitorUserId: 'someone-else' },
+        } as any,
+      });
+
+      expect(mockFileCreate.mock.calls[0][0].metadata.agentShare).toEqual({
+        shareId: 'share-1',
+        visitorUserId: VISITOR,
+      });
+    });
+  });
+
+  describe('abortUpload', () => {
+    it('releases an active reservation under the share prefix', async () => {
+      const pathname = `files/${OWNER}/agent-share/share-1/abc/cat.png`;
+      mockUploadFindLatest.mockResolvedValue({ status: 'active' });
+      const caller = await createCaller();
+
+      await caller.abortUpload({ pathname, shareId: 'share-1' });
+
+      expect(FileUploadServiceMock).toHaveBeenCalledWith(expect.anything(), OWNER, undefined);
+      expect(mockUploadRelease).toHaveBeenCalledWith(pathname);
+    });
+
+    it("cannot release a reservation outside the share prefix (the creator's own upload)", async () => {
+      const caller = await createCaller();
+
+      await expect(
+        caller.abortUpload({ pathname: `files/${OWNER}/2026/own.png`, shareId: 'share-1' }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(mockUploadRelease).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('removeFile', () => {
+    it("deletes this visitor's own unsent share upload and the stored object", async () => {
+      mockFileFindById.mockResolvedValue({ id: 'file-a' });
+      mockFileDeleteUnreferenced.mockResolvedValue({
+        id: 'file-a',
+        url: 'files/x/cat.png',
+      });
+      const caller = await createCaller();
+
+      await caller.removeFile({ fileId: 'file-a', shareId: 'share-1' });
+
+      expect(FileModelMock).toHaveBeenCalledWith(expect.anything(), OWNER, undefined);
+      expect(mockFileFindById).toHaveBeenCalledWith('file-a', {
+        accessScope: {
+          shareId: share.shareId,
+          type: 'agentShare',
+          visitorUserId: VISITOR,
+        },
+      });
+      expect(mockFileDeleteUnreferenced).toHaveBeenCalledWith('file-a', {
+        accessScope: {
+          shareId: share.shareId,
+          type: 'agentShare',
+          visitorUserId: VISITOR,
+        },
+        removeGlobalFile: true,
+      });
+      expect(mockDeleteStoredFile).toHaveBeenCalledWith('files/x/cat.png');
+    });
+
+    it('leaves the stored object alone when the row is already referenced by a message', async () => {
+      mockFileFindById.mockResolvedValue({ id: 'file-a' });
+      mockFileDeleteUnreferenced.mockResolvedValue(undefined);
+      const caller = await createCaller();
+
+      await caller.removeFile({ fileId: 'file-a', shareId: 'share-1' });
+
+      expect(mockDeleteStoredFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses a file outside the share and visitor provenance scope', async () => {
+      const caller = await createCaller();
+
+      await expect(
+        caller.removeFile({ fileId: 'file-a', shareId: 'share-1' }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'File not found' });
+      expect(mockFileDeleteUnreferenced).not.toHaveBeenCalled();
+    });
+  });
+
   describe('interruptTask', () => {
     it('interrupts a running operation that matches the topic ownership and running marker', async () => {
       const caller = await createCaller();
@@ -461,6 +1054,55 @@ describe('shareChatRouter', () => {
     });
   });
 
+  describe('setQueuedMessages', () => {
+    it('flags the running operation through the creator-scoped service', async () => {
+      const caller = await createCaller();
+
+      await expect(
+        caller.setQueuedMessages({
+          operationId: 'op-1',
+          pending: true,
+          shareId: 'share-1',
+          topicId: 'tpc_visitor',
+        }),
+      ).resolves.toEqual({ success: true });
+
+      expect(AiAgentServiceMock).toHaveBeenCalledWith(expect.anything(), OWNER, {
+        includeShareVisitor: true,
+      });
+      expect(mockSetQueuedMessages).toHaveBeenCalledWith({ operationId: 'op-1', pending: true });
+    });
+
+    it('rejects an operationId that does not match the topic’s current running operation', async () => {
+      const caller = await createCaller();
+
+      await expect(
+        caller.setQueuedMessages({
+          operationId: 'op-someone-elses',
+          pending: true,
+          shareId: 'share-1',
+          topicId: 'tpc_visitor',
+        }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(mockSetQueuedMessages).not.toHaveBeenCalled();
+    });
+
+    it("fails closed when the topic is not the visitor's own share topic", async () => {
+      mockFindById.mockResolvedValue({ ...visitorTopic, senderId: 'someone-else' });
+      const caller = await createCaller();
+
+      await expect(
+        caller.setQueuedMessages({
+          operationId: 'op-1',
+          pending: false,
+          shareId: 'share-1',
+          topicId: 'tpc_visitor',
+        }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(mockSetQueuedMessages).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getTopics', () => {
     it("returns only the visitor's own topics via agentId + senderId scoping", async () => {
       const caller = await createCaller();
@@ -468,8 +1110,8 @@ describe('shareChatRouter', () => {
 
       // Topic model is creator-scoped; the query narrows to this visitor's own
       // topics on this agent. `agent_shares` is 1:1 per agent, so `(agentId,
-      // senderId)` unambiguously identifies the share conversation without a
-      // share-instance column on `topics`.
+      // senderId)` identifies the share conversation without a share-instance
+      // column on `topics`.
       expect(TopicModelMock).toHaveBeenCalledWith(expect.anything(), OWNER, undefined, undefined, {
         includeShareVisitor: true,
       });
@@ -508,18 +1150,43 @@ describe('shareChatRouter', () => {
       expect(mockMessageQueryForVisitor).not.toHaveBeenCalled();
     });
 
-    it('serves messages without Work summaries', async () => {
+    it('assembles Work summaries under the visitor’s own share scope', async () => {
       const caller = await createCaller();
-      await caller.getMessages({ shareId: 'share-1', topicId: 'tpc_visitor' });
+      await caller.getMessages({
+        includeFileWorks: true,
+        shareId: 'share-1',
+        topicId: 'tpc_visitor',
+      });
 
       expect(mockMessageQueryForVisitor).toHaveBeenCalledWith(
-        { skipWorks: true, topicId: 'tpc_visitor' },
+        { includeFileWorks: true, topicId: 'tpc_visitor' },
         expect.objectContaining({
           redaction: {
             showErrorDetails: undefined,
             showModelInfo: undefined,
           },
+          // Pinned to share + topic + VISITOR: the ordinary scope would join
+          // the creator's Works, which must never reach a visitor surface.
+          workAccessScope: {
+            shareId: 'share-1',
+            topicId: 'tpc_visitor',
+            type: 'agentShare',
+            visitorUserId: VISITOR,
+          },
         }),
+      );
+    });
+
+    it('keeps the Work-free response for clients that do not opt in', async () => {
+      // Pre-Works clients (rolling deploys, cached sessions, lagging desktop
+      // builds) omit `includeFileWorks` and cannot open visitor Work cards, so
+      // no share scope is supplied and queryForVisitor skips Work assembly.
+      const caller = await createCaller();
+      await caller.getMessages({ shareId: 'share-1', topicId: 'tpc_visitor' });
+
+      expect(mockMessageQueryForVisitor).toHaveBeenCalledWith(
+        { includeFileWorks: undefined, topicId: 'tpc_visitor' },
+        expect.objectContaining({ workAccessScope: undefined }),
       );
     });
 
@@ -531,6 +1198,111 @@ describe('shareChatRouter', () => {
       await caller.getMessages({ shareId: 'share-1', topicId: 'tpc_visitor' });
 
       expect(mockMessageQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getDocument', () => {
+    const document = {
+      content: '# Notes',
+      fileType: 'text/markdown',
+      id: 'doc-1',
+      metadata: { agentShare: { shareId: 'share-1' }, secret: 'creator-only' },
+      title: 'Notes',
+      updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+      userId: OWNER,
+    };
+
+    it('reads the document under the visitor’s share document scope', async () => {
+      mockDocumentFindById.mockResolvedValue(document);
+      const caller = await createCaller();
+
+      await expect(
+        caller.getDocument({ documentId: 'doc-1', shareId: 'share-1', topicId: 'tpc_visitor' }),
+      ).resolves.toEqual({
+        content: '# Notes',
+        fileType: 'text/markdown',
+        id: 'doc-1',
+        title: 'Notes',
+        updatedAt: document.updatedAt,
+      });
+      // Creator-scoped model + the share scope pinned to this visitor topic.
+      expect(DocumentModelMock).toHaveBeenCalledWith(
+        expect.anything(),
+        OWNER,
+        undefined,
+        undefined,
+        { shareId: 'share-1', topicId: 'tpc_visitor', type: 'agentShare', visitorUserId: VISITOR },
+      );
+      expect(mockDocumentFindById).toHaveBeenCalledWith('doc-1');
+    });
+
+    it('404s when the scoped lookup misses (creator or other-visitor document)', async () => {
+      mockDocumentFindById.mockResolvedValue(undefined);
+      const caller = await createCaller();
+
+      await expect(
+        caller.getDocument({ documentId: 'doc-1', shareId: 'share-1', topicId: 'tpc_visitor' }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    });
+
+    it('rejects a topic that is not the visitor’s own', async () => {
+      mockFindById.mockResolvedValue({ ...visitorTopic, senderId: 'someone-else' });
+      const caller = await createCaller();
+
+      await expect(
+        caller.getDocument({ documentId: 'doc-1', shareId: 'share-1', topicId: 'tpc_visitor' }),
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      expect(mockDocumentFindById).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('issueGatewayUserToken', () => {
+    it('signs the per-user hub token for the VISITOR, never the creator', async () => {
+      const caller = await createCaller();
+
+      await expect(caller.issueGatewayUserToken({ shareId: 'share-1' })).resolves.toEqual({
+        token: 'visitor-jwt',
+      });
+      expect(mockSignUserJWT).toHaveBeenCalledWith(VISITOR);
+      expect(mockAccessCheck).toHaveBeenCalledWith(expect.anything(), 'share-1', VISITOR);
+    });
+
+    // The v2 hub socket is per user, not per operation: the hub authorizes
+    // each `subscribe` against the op's registered owner, so minting must not
+    // depend on a topic marker or a live run (a visitor opens the socket
+    // before their first send).
+    it('does not require a topic or a running operation', async () => {
+      mockFindById.mockResolvedValue(undefined);
+      mockIsRunningOperationAlive.mockResolvedValue(false);
+      const caller = await createCaller();
+
+      await expect(caller.issueGatewayUserToken({ shareId: 'share-1' })).resolves.toEqual({
+        token: 'visitor-jwt',
+      });
+      expect(mockFindById).not.toHaveBeenCalled();
+      expect(mockIsRunningOperationAlive).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown share without signing anything', async () => {
+      mockAccessCheck.mockRejectedValue(
+        new TRPCError({ code: 'NOT_FOUND', message: 'Share not found' }),
+      );
+      const caller = await createCaller();
+
+      await expect(caller.issueGatewayUserToken({ shareId: 'missing' })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+      });
+      expect(mockSignUserJWT).not.toHaveBeenCalled();
+    });
+
+    it('rejects a share that is not link-visible', async () => {
+      mockAccessCheck.mockResolvedValue({ ...share, visibility: 'private' });
+      const caller = await createCaller();
+
+      await expect(caller.issueGatewayUserToken({ shareId: 'share-1' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mockSignUserJWT).not.toHaveBeenCalled();
     });
   });
 
@@ -613,6 +1385,9 @@ describe('shareChatRouter', () => {
         await expect(
           caller.refreshGatewayToken({ shareId: 'share-1', topicId: 'tpc_visitor' }),
         ).resolves.toEqual({ token: 'visitor-jwt' });
+        await expect(caller.issueGatewayUserToken({ shareId: 'share-1' })).resolves.toEqual({
+          token: 'visitor-jwt',
+        });
         expect(mockGetFeatureFlagsState).not.toHaveBeenCalled();
       },
     );

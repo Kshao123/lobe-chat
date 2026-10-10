@@ -414,6 +414,63 @@ describe('Task Router Integration', () => {
     });
   });
 
+  describe('schedule pattern validation', () => {
+    it('accepts standard cron with day-of-month, month and weekday ranges', async () => {
+      const created = await caller.create({
+        automationMode: 'schedule',
+        instruction: 'One-shot reminder',
+        schedulePattern: '0 10 27 9 *',
+        scheduleTimezone: 'Asia/Shanghai',
+      });
+      const updated = await caller.update({
+        id: created.data.id,
+        schedulePattern: '45 11 * * 1-5',
+      });
+      expect(updated.data.schedulePattern).toBe('45 11 * * 1-5');
+    });
+
+    it('rejects cron the dispatcher cannot evaluate on create and update', async () => {
+      await expect(
+        caller.create({
+          automationMode: 'schedule',
+          instruction: 'Bad cron',
+          schedulePattern: '0 0 9 * * *',
+        }),
+      ).rejects.toThrow(/Invalid schedulePattern .*0 0 9 \* \* \*.*expected 5 fields/);
+
+      const created = await caller.create({ instruction: 'Later scheduled' });
+      await expect(
+        caller.update({ id: created.data.id, schedulePattern: '0 0 30 2 *' }),
+      ).rejects.toThrow(/Invalid schedulePattern .*0 0 30 2 \*.*day of month/);
+      await expect(
+        caller.update({ id: created.data.id, scheduleTimezone: 'Mars/Base' }),
+      ).rejects.toThrow(/IANA timezone/);
+    });
+
+    it('checks the resulting pattern/timezone pair against the stored schedule', async () => {
+      const created = await caller.create({ instruction: 'Legacy schedule' });
+      // A row written before write-time validation existed.
+      await new TaskModel(testDB, userId).update(created.data.id, {
+        schedulePattern: '0 0 9 * * *',
+        scheduleTimezone: 'Mars/Base',
+      });
+
+      await expect(
+        caller.update({ id: created.data.id, schedulePattern: '0 9 * * *' }),
+      ).rejects.toThrow(/Invalid schedule: unknown timezone "Mars\/Base"/);
+      await expect(
+        caller.update({ automationMode: 'schedule', id: created.data.id }),
+      ).rejects.toThrow(/Invalid schedule: expected 5 fields/);
+
+      const updated = await caller.update({
+        id: created.data.id,
+        schedulePattern: '0 9 * * *',
+        scheduleTimezone: 'Asia/Shanghai',
+      });
+      expect(updated.data.scheduleTimezone).toBe('Asia/Shanghai');
+    });
+  });
+
   describe('status transitions', () => {
     it('should transition backlog → running → paused → completed', async () => {
       const task = await caller.create({ instruction: 'Test' });
@@ -1650,6 +1707,53 @@ describe('Task Router Integration', () => {
 
       const all = await wsCaller.list({});
       expect(all.total).toBe(3);
+    });
+
+    it('should narrow the grouped board to the same slice as the list', async () => {
+      otherUserId = await createTestUser(serverDB);
+      const workspaceId = 'task-group-scope-workspace';
+      const { workspaces, workspaceMembers } = await import('@/database/schemas');
+      await serverDB.insert(workspaces).values({
+        id: workspaceId,
+        name: 'Task Group Scope Workspace',
+        primaryOwnerId: userId,
+        slug: workspaceId,
+      });
+      await serverDB.insert(workspaceMembers).values([
+        { role: 'owner', userId, workspaceId },
+        { role: 'member', userId: otherUserId!, workspaceId },
+      ]);
+      const wsCaller = taskRouter.createCaller({ ...createTestContext(userId), workspaceId });
+      const wsOtherCaller = taskRouter.createCaller({
+        ...createTestContext(otherUserId),
+        workspaceId,
+      });
+
+      const mineForOther = await wsCaller.create({
+        assigneeUserId: otherUserId,
+        instruction: 'Mine for other',
+        name: 'Mine for other',
+      });
+      const othersForMe = await wsOtherCaller.create({
+        assigneeUserId: userId,
+        instruction: 'Others for me',
+        name: 'Others for me',
+      });
+      await wsOtherCaller.create({ instruction: 'Others unassigned', name: 'Others unassigned' });
+
+      const groups = () => ({ groups: [{ key: 'backlog', statuses: ['backlog'] }] });
+      const idsIn = (result: { data: Array<{ tasks: Array<{ id: string }> }> }) =>
+        result.data.flatMap((group) => group.tasks.map((task) => task.id));
+
+      // The board is the same rows as the list, only grouped — a scope the
+      // board ignored would quietly widen "My tasks" on the view switch.
+      expect(idsIn(await wsCaller.groupList({ ...groups(), scope: 'assigned' }))).toEqual([
+        othersForMe.data.id,
+      ]);
+      expect(idsIn(await wsCaller.groupList({ ...groups(), scope: 'created' }))).toEqual([
+        mineForOther.data.id,
+      ]);
+      expect(idsIn(await wsCaller.groupList(groups()))).toHaveLength(3);
     });
   });
 

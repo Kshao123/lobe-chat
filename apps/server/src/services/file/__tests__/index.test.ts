@@ -1,8 +1,10 @@
+import { agentShareFileAccessScope } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FileModel } from '@/database/models/file';
 import { TempFileManager } from '@/server/utils/tempFileManager';
+import { FileSource } from '@/types/files';
 
 import { FileService } from '../index';
 
@@ -60,8 +62,9 @@ describe('FileService', () => {
 
   beforeEach(() => {
     mockFileModel = {
-      findById: vi.fn(),
       delete: vi.fn(),
+      deleteUnreferenced: vi.fn(),
+      findById: vi.fn(),
       updateGlobalFile: vi.fn(),
     };
     mockTempManager = {
@@ -92,6 +95,19 @@ describe('FileService', () => {
     new FileService(mockDb, mockUserId, 'workspace-1');
 
     expect(FileModel).toHaveBeenCalledWith(mockDb, mockUserId, 'workspace-1');
+  });
+
+  /** @example Shared blobs survive cleanup; exclusively owned blobs are removed. */
+  it('deletes storage only when reference-safe cleanup returns the file', async () => {
+    mockFileModel.deleteUnreferenced
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ id: 'exclusive', url: 'files/exclusive.pdf' });
+    await service.removeUnreferencedFile('shared', FileSource.AgentDocument);
+    /** @example A shared object is not removed. */
+    expect(service['impl'].deleteFile).not.toHaveBeenCalled();
+    await service.removeUnreferencedFile('exclusive', FileSource.AgentDocument);
+    /** @example The exclusive object's key is removed after DB cleanup. */
+    expect(service['impl'].deleteFile).toHaveBeenCalledWith('files/exclusive.pdf');
   });
 
   describe('downloadFileToLocal', () => {
@@ -126,7 +142,10 @@ describe('FileService', () => {
         new TRPCError({ code: 'BAD_REQUEST', message: 'File not found' }),
       );
 
-      expect(mockFileModel.delete).toHaveBeenCalledWith('test-file-id', false);
+      expect(mockFileModel.delete).toHaveBeenCalledWith('test-file-id', {
+        accessScope: { type: 'ordinary' },
+        removeGlobalFile: false,
+      });
     });
 
     it('should log error and rethrow for non-NoSuchKey errors', async () => {
@@ -170,6 +189,39 @@ describe('FileService', () => {
       });
 
       expect(mockTempManager.writeTempFile).toHaveBeenCalledWith(mockContent, mockFile.name);
+    });
+
+    it('should resolve an agent-share file only through its provenance scope', async () => {
+      const accessScope = agentShareFileAccessScope({
+        shareId: 'share-1',
+        visitorUserId: 'visitor-1',
+      });
+      const mockContent = new Uint8Array([1, 2, 3]);
+      mockFileModel.findById.mockResolvedValue(mockFile);
+      vi.mocked(service['impl'].getFileByteArray).mockResolvedValue(mockContent);
+      mockTempManager.writeTempFile.mockResolvedValue('/tmp/test.txt');
+
+      await service.downloadFileToLocal('test-file-id', accessScope);
+
+      expect(mockFileModel.findById).toHaveBeenCalledWith('test-file-id', { accessScope });
+    });
+
+    it('should use the scoped cleanup path when an agent-share object is missing', async () => {
+      const accessScope = agentShareFileAccessScope({
+        shareId: 'share-1',
+        visitorUserId: 'visitor-1',
+      });
+      mockFileModel.findById.mockResolvedValue(mockFile);
+      vi.mocked(service['impl'].getFileByteArray).mockRejectedValue({ Code: 'NoSuchKey' });
+
+      await expect(service.downloadFileToLocal('test-file-id', accessScope)).rejects.toThrow(
+        new TRPCError({ code: 'BAD_REQUEST', message: 'File not found' }),
+      );
+
+      expect(mockFileModel.delete).toHaveBeenCalledWith('test-file-id', {
+        accessScope,
+        removeGlobalFile: false,
+      });
     });
   });
 
@@ -411,6 +463,26 @@ describe('FileService', () => {
             path: 'files/test-user/abc/test.txt',
           }),
         }),
+        expect.any(Boolean),
+        expect.anything(),
+      );
+    });
+
+    it('preserves private visibility and page-editor source for rehosted images', async () => {
+      const beforeRecord = vi.fn();
+      await service.uploadFromBuffer(
+        Buffer.from('image'),
+        'image/png',
+        'images/test.png',
+        beforeRecord,
+        {
+          source: FileSource.PageEditor,
+          visibility: 'private',
+        },
+      );
+      expect(beforeRecord).toHaveBeenCalled();
+      expect(mockFileModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'page-editor', visibility: 'private' }),
         expect.any(Boolean),
         expect.anything(),
       );

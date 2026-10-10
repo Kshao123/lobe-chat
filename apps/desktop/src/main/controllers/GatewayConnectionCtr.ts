@@ -13,10 +13,16 @@ import {
   resolveRemotePlatformRuntime,
 } from '@lobechat/heterogeneous-agents/scanHost';
 import { type ILocalSystemService, LocalSystemExecutionRuntime } from '@lobechat/tool-runtime';
+import { managedProcessEnvironment, spawnManaged } from '@lobechat/utils/managedProcess';
+import { app as electronApp } from 'electron';
 
+import { updaterConfig } from '@/modules/updater/configs';
+import { createRemoteAppUpdateDeps } from '@/modules/updater/remoteUpdate';
 import AuvService, { type AuvRunCommandParams } from '@/services/auvSrv';
+import { backfillDeviceArchitecture } from '@/services/deviceArchitectureBackfill';
 import GatewayConnectionService from '@/services/gatewayConnectionSrv';
 import ImessageBridgeService from '@/services/imessageBridgeSrv';
+import { findHeteroExecProcesses } from '@/utils/heteroExecProcess';
 import { createLogger } from '@/utils/logger';
 import { setDesktopUserAgentHeader } from '@/utils/user-agent';
 
@@ -27,6 +33,13 @@ import LocalFileCtr from './LocalFileCtr';
 import McpCtr from './McpCtr';
 import RemoteServerConfigCtr from './RemoteServerConfigCtr';
 import ShellCommandCtr from './ShellCommandCtr';
+
+/**
+ * How long an orphaned `hetero exec` group may take to exit after cancellation.
+ * Covers the 2s graceful window plus SIGKILL, and stays under the server's 10s
+ * `cancelHeteroTask` timeout.
+ */
+const ORPHAN_EXIT_TIMEOUT_MS = 5000;
 
 const logger = createLogger('controllers:GatewayConnectionCtr');
 const deviceProtocolHandler = createProtocolHandler('device');
@@ -239,7 +252,18 @@ export default class GatewayConnectionCtr extends ControllerModule {
 
   @IpcMethod()
   async getConnectionStatus(): Promise<{ status: GatewayConnectionStatus }> {
-    return { status: this.service.getStatus() };
+    return { status: this.service.getDisplayedStatus() };
+  }
+
+  @IpcMethod()
+  async getKeepAwake(): Promise<{ enabled: boolean }> {
+    return { enabled: this.service.getKeepAwake() };
+  }
+
+  @IpcMethod()
+  async setKeepAwake({ enabled }: { enabled: boolean }): Promise<{ enabled: boolean }> {
+    this.service.setKeepAwake(enabled);
+    return { enabled: this.service.getKeepAwake() };
   }
 
   @IpcMethod()
@@ -248,7 +272,26 @@ export default class GatewayConnectionCtr extends ControllerModule {
     hostname: string;
     platform: string;
   }> {
-    return this.service.getDeviceInfo();
+    const info = this.service.getDeviceInfo();
+    try {
+      const [serverUrl, token] = await Promise.all([
+        this.remoteServerConfigCtr.getRemoteServerUrl(),
+        this.remoteServerConfigCtr.getAccessToken(),
+      ]);
+      if (serverUrl && token && info.deviceId !== 'unknown') {
+        const headers = { 'Content-Type': 'application/json', 'Oidc-Auth': token };
+        setDesktopUserAgentHeader(headers);
+        await backfillDeviceArchitecture({
+          architecture: os.arch(),
+          deviceId: info.deviceId,
+          headers,
+          serverUrl,
+        });
+      }
+    } catch (error) {
+      logger.warn('Could not backfill local device architecture; will retry on next read', error);
+    }
+    return info;
   }
 
   /**
@@ -314,6 +357,7 @@ export default class GatewayConnectionCtr extends ControllerModule {
       // the process has actually spawned (or emitted an early error) before
       // acknowledging the server request.
       return await this.heterogeneousAgentCtr.spawnLhHeteroExec({
+        agentId: request.agentId,
         agentType: request.agentType,
         assistantMessageId: request.assistantMessageId,
         args: request.args,
@@ -415,13 +459,24 @@ export default class GatewayConnectionCtr extends ControllerModule {
       getLocalFilePreview: (params) => this.localFileCtr.getLocalFilePreview(params),
       readExternalAssetForPublish: (params) =>
         this.localFileCtr.readExternalAssetForPublish(params),
+      copyAssetForPublish: (params) => this.localFileCtr.copyAssetForPublish(params),
       getProjectFileIndex: (params) => this.localFileCtr.getProjectFileIndex(params),
       listHeterogeneousAgentModels: (params) => this.heterogeneousAgentCtr.listModels(params),
       searchProjectFiles: (params) => this.localFileCtr.searchProjectFiles(params),
+      // Remote "delete" goes to this machine's trash (`shell.trashItem`), same
+      // as the local Files tree, so it stays recoverable.
+      trashLocalFiles: (params) => this.localFileCtr.trashLocalFiles(params),
       unenrollWorkspace: (params) => this.service.unenrollWorkspace(params),
       // Skill-archive cache (`prepareSkillDirectory` RPC): reuse LocalFileCtr's
       // deps so gateway-prepared skills share one cache with the renderer-IPC path.
       ...this.localFileCtr.getSkillDirectoryDeps(),
+      // Remote app update from the web device page, over the same updater the
+      // local "Check for updates" menu drives.
+      ...createRemoteAppUpdateDeps({
+        currentVersion: electronApp.getVersion(),
+        enabled: updaterConfig.enableAppUpdate,
+        getUpdater: () => this.app.getUpdaterManager(),
+      }),
     };
   }
 
@@ -863,10 +918,10 @@ export default class GatewayConnectionCtr extends ControllerModule {
         '--local',
       ];
       const spawnPlan = await runtime.prepareSpawn(openclawArgs);
-      const child = spawn(spawnPlan.command, spawnPlan.args, {
+      const child = spawnManaged(spawnPlan.command, spawnPlan.args, {
         cwd: workDir,
         detached: true,
-        env: spawnPlan.env,
+        env: { ...spawnPlan.env, ...managedProcessEnvironment({ topicId, agentId }) },
         stdio: 'ignore',
       });
 
@@ -959,10 +1014,10 @@ export default class GatewayConnectionCtr extends ControllerModule {
       // Hermes keeps stdout response-only in --quiet mode and prints the final
       // session_id to stderr so callers can resume the session on the next turn.
       const spawnPlan = await runtime.prepareSpawn(hermesArgs);
-      const child = spawn(spawnPlan.command, spawnPlan.args, {
+      const child = spawnManaged(spawnPlan.command, spawnPlan.args, {
         cwd: workDir,
         detached: true,
-        env: spawnPlan.env,
+        env: { ...spawnPlan.env, ...managedProcessEnvironment({ topicId, agentId }) },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
@@ -1143,13 +1198,75 @@ export default class GatewayConnectionCtr extends ControllerModule {
     const entry = this.platformTasks.get(taskId);
 
     if (!entry) {
-      return JSON.stringify({ message: `No task found with taskId: ${taskId}`, success: false });
+      return JSON.stringify(await this.cancelUntrackedHeteroExec(taskId, signal as NodeJS.Signals));
     }
 
     // The close handler sends the terminal notify after the whole tree exits.
     this.killPlatformProcessTree(entry.pid, signal as NodeJS.Signals);
 
     return JSON.stringify({ pid: entry.pid, signal, taskId });
+  }
+
+  /**
+   * Cancels an operation that neither in-memory registry knows about.
+   *
+   * Use when:
+   * - The desktop app restarted after dispatching `lh hetero exec`: the
+   *   registries are empty, but the server keeps the task running until the
+   *   device confirms `exited: true`.
+   *
+   * Expects:
+   * - `taskId` is the operation id passed as `--operation-id` to the wrapper.
+   *
+   * Returns:
+   * - `exited: true` only when the OS shows no wrapper for the operation, or
+   *   after every orphaned wrapper group has exited.
+   * - `exited: false` when an orphan survives SIGKILL or the process table
+   *   cannot be read, so a retry never races a live writer.
+   * - Windows keeps the previous unconfirmed answer; orphan lookup is Unix-only.
+   */
+  private async cancelUntrackedHeteroExec(
+    taskId: string,
+    signal: NodeJS.Signals,
+  ): Promise<Record<string, unknown>> {
+    if (process.platform === 'win32') {
+      return { message: `No task found with taskId: ${taskId}`, success: false };
+    }
+
+    let orphans: Awaited<ReturnType<typeof findHeteroExecProcesses>>;
+    try {
+      orphans = await findHeteroExecProcesses(taskId);
+    } catch (error) {
+      logger.warn('cancelHeteroTask: process lookup failed for %s: %O', taskId, error);
+      return {
+        exited: false,
+        message: `Could not inspect running processes for taskId: ${taskId}`,
+        reason: 'lookup_failed',
+        success: false,
+        taskId,
+      };
+    }
+
+    if (orphans.length === 0) {
+      return { exited: true, reason: 'not_found', success: true, taskId };
+    }
+
+    const pids = orphans.map((orphan) => orphan.pid);
+    logger.warn('cancelHeteroTask: terminating orphaned hetero exec for %s: %o', taskId, pids);
+
+    // The wrapper leads a detached group shared by its native agent child, so
+    // this reaches the whole writer tree and escalates to SIGKILL after 2s.
+    for (const pid of pids) this.killPlatformProcessTree(pid, signal);
+
+    const deadline = Date.now() + ORPHAN_EXIT_TIMEOUT_MS;
+    while (pids.some((pid) => this.isPlatformProcessGroupAlive(pid))) {
+      if (Date.now() >= deadline) {
+        return { exited: false, pids, reason: 'orphan_alive', signal, success: false, taskId };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    return { exited: true, pids, reason: 'orphan_terminated', signal, success: true, taskId };
   }
 
   /**

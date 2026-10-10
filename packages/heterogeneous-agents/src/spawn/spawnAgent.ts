@@ -1,9 +1,10 @@
 import type { ChildProcess } from 'node:child_process';
-import { spawn } from 'node:child_process';
+import { platform } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import type { AgentStreamEvent } from '@lobechat/agent-gateway-client';
+import { spawnManaged } from '@lobechat/utils/managedProcess';
 
 import type { AskUserBridge } from '../askUser/AskUserBridge';
 import { resolveHeterogeneousAgentCommand } from '../config';
@@ -11,8 +12,8 @@ import { AgentStreamPipeline, type UploadHeterogeneousImage } from './agentStrea
 import { isPathLikeCommand, resolveCliSpawnPlan } from './cliSpawn';
 import { readCodexSessionModel, resolveCodexInitialModel } from './codexModel';
 import { buildCursorAcpPrompt, CursorAcpSession } from './cursorAcpSession';
-import { buildDroidAcpPrompt, DroidAcpSession } from './droidAcpSession';
 import { buildDevinAcpPrompt, DevinAcpSession } from './devinAcpSession';
+import { buildDroidAcpPrompt, DroidAcpSession } from './droidAcpSession';
 import { buildGrokAcpPrompt, GrokAcpSession } from './grokAcpSession';
 import type { AgentPromptInput, BuildAgentInputOptions } from './input';
 import { buildAgentInput } from './input';
@@ -213,7 +214,6 @@ export const AMP_BASE_ARGS = [
 ] as const;
 
 export const OPENCODE_BASE_ARGS = ['run', '--format', 'json', '--thinking', '--auto'] as const;
-export const PI_BASE_ARGS = ['--mode', 'json'] as const;
 export const KIMI_CODE_BASE_ARGS = ['--output-format', 'stream-json'] as const;
 export const QODER_BASE_ARGS = [
   '-p',
@@ -296,12 +296,13 @@ const buildOpenCodeArgs = ({ extraArgs, inputArgs, resumeSessionId }: BuildSpawn
   ...extraArgs,
 ];
 
-const buildPiArgs = ({ extraArgs, inputArgs, resumeSessionId }: BuildSpawnArgsParams) => [
-  ...PI_BASE_ARGS,
-  ...(resumeSessionId ? ['--session-id', resumeSessionId] : []),
-  ...inputArgs,
-  ...extraArgs,
-];
+const buildPiArgs = (_params: BuildSpawnArgsParams): never => {
+  // pi runs exclusively over the RPC transport (PiRpcSession /
+  // createPiRpcAgentHandle). Reaching the legacy json spawn is a bug.
+  throw new Error(
+    'pi runs over the RPC transport only — use PiRpcSession / createPiRpcAgentHandle',
+  );
+};
 
 const buildKimiCodeArgs = ({ extraArgs, inputArgs, resumeSessionId }: BuildSpawnArgsParams) => [
   ...KIMI_CODE_BASE_ARGS,
@@ -366,7 +367,7 @@ const killProcessTree = (proc: ChildProcess, signal: NodeJS.Signals, detached: b
   // to a direct signal. Tree-kill via `taskkill` is what the desktop
   // controller does for end-user CC, but the CLI's primary use case is
   // sandbox + Unix dev terminals, so keep this minimal.
-  if (process.platform === 'win32') {
+  if (platform() === 'win32') {
     try {
       proc.kill(signal);
     } catch {
@@ -706,8 +707,8 @@ export const spawnAgent = async (options: SpawnAgentOptions): Promise<SpawnAgent
   const initialCumulativeUsage = resumedCodexSession?.cumulativeUsage;
 
   const cliSpawnPlan = await resolveCliSpawnPlan(command, args);
-  const detached = process.platform !== 'win32' && (options.detached ?? true);
-  const proc = spawn(cliSpawnPlan.command, cliSpawnPlan.args, {
+  const detached = platform() !== 'win32' && (options.detached ?? true);
+  const proc = spawnManaged(cliSpawnPlan.command, cliSpawnPlan.args, {
     cwd,
     detached,
     env: childEnv,
@@ -798,6 +799,12 @@ export const spawnAgent = async (options: SpawnAgentOptions): Promise<SpawnAgent
         const { code } = await exit;
         if (code === 0 && !killedByUs) {
           for (const event of pipeline.validateCompletion()) queue.push(event);
+        }
+        // Kimi Code reports usage only via its on-disk session wire log, so
+        // it can only be collected now that the process has exited. The hook
+        // is a no-op for every other agent type.
+        for (const event of await pipeline.collectPostRunUsage({ env: childEnv })) {
+          queue.push(event);
         }
       } catch (err) {
         streamError = err instanceof Error ? err : new Error(String(err));
